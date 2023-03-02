@@ -61,7 +61,7 @@ nfn = nn.Sequential(
     layers.NPLinear(network_spec, 1, nfn_channels, io_embed=True),
     layers.TupleOp(nn.ReLU()),
     layers.NPLinear(network_spec, nfn_channels, nfn_channels, io_embed=True),
-    layser.TupleOp(nn.ReLU()),
+    layers.TupleOp(nn.ReLU()),
     layers.HNPPool(network_spec),  # pooling layer, for invariance
     nn.Flatten(start_dim=-2),
     nn.Linear(nfn_channels * layers.HNPPool.get_num_outs(network_spec), 1)
