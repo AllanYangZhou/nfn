@@ -54,6 +54,7 @@ from nfn import layers
 from nfn.common import network_spec_from_wsfeat
 
 network_spec = network_spec_from_wsfeat(wsfeat)
+nfn_channels = 32
 
 # io_embed: encode the input and output dimensions of the weight space feature
 nfn = nn.Sequential(
