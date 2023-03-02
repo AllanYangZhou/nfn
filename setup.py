@@ -9,10 +9,10 @@ setup(
     author_email='ayz@cs.stanford.edu',
     license='MIT',
     packages=find_packages(),
-    install_requires=['torch>=1.13', 'numpy', 'einops>=0.6'],
+    install_requires=['einops', 'torch'],
     classifiers=[
         'Intended Audience :: Science/Research',
         'License :: OSI Approved :: MIT License',
-        'Programming Language :: Python :: 3.7.12',
+        'Programming Language :: Python :: 3.7',
     ]
 )
