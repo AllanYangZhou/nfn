@@ -1,0 +1,3 @@
+_target_: experiments.data_utils.ZooDataset
+data_path: ${root_data_dir}/svhn_cropped
+idcs_file: ./experiments/predict_gen_data_splits/svhn_split.csv

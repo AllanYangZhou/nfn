@@ -1,0 +1,20 @@
+defaults:
+  - nfnet: hnp_inv
+  - dset: zoo_cifar
+  - _self_
+
+output_dir: ${hydra:runtime.output_dir}
+batch_size: 8
+epochs: 50
+lr: 1e-3
+warmup_steps: 0
+seed: 0
+loss_fn: bce  # or mse
+debug: false
+root_data_dir: ./experiments/data
+test_metric: tau
+
+# don't change directory
+hydra:
+  job:
+    chdir: False

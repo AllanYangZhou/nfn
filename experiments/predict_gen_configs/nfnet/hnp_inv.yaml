@@ -1,0 +1,9 @@
+defaults:
+  - head_cls: mlp
+_target_: experiments.models.InvariantNFN
+hchannels: [16, 16, 5]
+mode: HNP
+feature_dropout: 0.0
+normalize: false
+lnorm: null
+append_stats: false

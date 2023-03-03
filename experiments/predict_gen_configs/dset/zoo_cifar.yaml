@@ -1,0 +1,3 @@
+_target_: experiments.data_utils.ZooDataset
+data_path: ${root_data_dir}/cifar10
+idcs_file: ./experiments/predict_gen_data_splits/cifar10_split.csv
