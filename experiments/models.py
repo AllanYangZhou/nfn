@@ -132,11 +132,11 @@ class InvariantNFN(NormalizingModule):
             if feature_dropout > 0:
                 layers.append(ChannelDropout(feature_dropout))
             prev_channels = num_channels
-        self.hnet_features = nn.Sequential(*layers)
+        self.nfnet_features = nn.Sequential(*layers)
         self.head = head_cls(network_spec, prev_channels, append_stats)
 
     def forward(self, params):
-        features = self.hnet_features(self.preprocess(params))
+        features = self.nfnet_features(self.preprocess(params))
         if self.stats is not None:
             features = torch.cat([features, self.stats(params)], dim=-1)
         return self.head(features)
