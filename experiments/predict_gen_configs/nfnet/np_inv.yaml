@@ -1,0 +1,5 @@
+defaults:
+  - hnp_inv
+
+normalize: true
+mode: NP-PosEmb

@@ -1,0 +1,7 @@
+_target_: experiments.models.MlpHead
+_partial_: true
+sigmoid: true
+num_out: 1
+lnorm: false
+pool_mode: HNP
+dropout: 0

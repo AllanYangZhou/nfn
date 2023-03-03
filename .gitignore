@@ -3,3 +3,6 @@ venv
 dist/
 *.egg-info
 build/
+experiments/data
+outputs/
+wandb/
