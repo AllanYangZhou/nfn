@@ -8,7 +8,7 @@ setup(
     author='Allan Zhou',
     author_email='ayz@cs.stanford.edu',
     license='MIT',
-    packages=find_packages(),
+    packages=find_packages(exclude=["examples"]),
     install_requires=['einops', 'torch'],
     classifiers=[
         'Intended Audience :: Science/Research',
