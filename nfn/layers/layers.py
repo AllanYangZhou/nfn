@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 from torch import nn
-from einops import rearrange
+from einops import rearrange, einsum
 from nfn.common import NetworkSpec, WeightSpaceFeatures
 from nfn.layers.layer_utils import set_init_, shape_wsfeat_symmetry, unshape_wsfeat_symmetry
 
@@ -301,3 +301,64 @@ class HNPLinear(nn.Module):
 
     def __repr__(self):
         return f"HNPLinear(in_channels={self.c_in}, out_channels={self.c_out}, n_in={self.n_in}, n_out={self.n_out}, num_layers={self.L})"
+
+
+def simple_attention(q, k, v):
+    # q, k, v: (..., T, d)
+    attn = einsum(q, k, "... t d, ... s d -> ... t s").softmax(dim=-1)
+    return einsum(attn, v, "... t s, ... s d -> ... t d")
+
+
+class ChannelLinear(nn.Module):
+    """Probably equivalent to a 1x1 nn.Conv2d."""
+    def __init__(self, in_channels, out_channels, bias=True):
+        super().__init__()
+        self.linear = nn.Linear(in_channels, out_channels, bias=bias)
+
+    def forward(self, x):
+        x = rearrange(x, "b c ... -> b ... c")
+        x = self.linear(x)
+        return rearrange(x, "b ... c -> b c ...")
+
+
+class NPAttention(nn.Module):
+    def __init__(
+        self, network_spec: NetworkSpec, channels,
+        num_heads=8, dropout=0.1
+    ):
+        super().__init__()
+        assert channels % num_heads == 0, f"channels ({channels}) must be divisible by num_heads ({num_heads})."
+        self.to_qkv = ChannelLinear(channels, 3 * channels)
+        self.nh = num_heads
+        self.ch = channels // num_heads  # channels per head
+
+    def _global_avgs(self, wsfeat: WeightSpaceFeatures) -> torch.Tensor:
+        rowcol_means = [w.mean(dim=(-2, -1)) for w in wsfeat.weights]  # (B, nh, c)
+        bias_means = [b.mean(dim=-1) for b in wsfeat.biases]  # (B, nh, c)
+        return torch.stack(rowcol_means + bias_means, dim=-2)  # (B, nh, 2 * n_layers, c)
+
+    def forward(self, wsfeat: WeightSpaceFeatures) -> WeightSpaceFeatures:
+        qkv = wsfeat.map(self.to_qkv)
+        qkv = qkv.map(lambda x: rearrange(x, "b (nh ch) ... -> b nh ch ...", nh=self.nh, ch=3 * self.ch))
+        qkv_avgs = self._global_avgs(qkv)  # (B, nh, 2 * n_layers, 3ch)
+        q_avg, k_avg, v_avg = qkv_avgs.tensor_split(3, dim=-1)  # (B, nh, 2 * n_layers, ch)
+        wb_out = rearrange(simple_attention(q_avg, k_avg, v_avg), "b nh t c -> b t (nh c)")
+        w_out, b_out = wb_out.tensor_split(2, dim=-2)  # (B, n_layers, nh*ch)
+        out_weights = [torch.zeros_like(w) for w in wsfeat.weights]
+        for i in range(len(out_weights)):
+            out_weights[i] += rearrange(w_out[:, i], "b C -> b C 1 1")
+        for i in range(len(wsfeat) - 1):
+            n_i, n_im1 = wsfeat.weights[i].shape[-2], wsfeat.weights[i].shape[-1]
+            inp1 = rearrange(qkv.weights[i], "... c n_i n_im1 -> ... n_im1 c n_i")
+            inp2 = rearrange(qkv.weights[i+1], "... c n_ip1 n_i -> ... n_ip1 c n_i")
+            inp = torch.cat([inp1, inp2], dim=-3)  # (B, nh, n_im1 + n_ip1, 3c, n_i)
+            q_i, k_i, v_i = inp.tensor_split(3, dim=-2) # (B, nh, n_im1 + n_ip1, c, n_i)
+            # TODO: can this be simplified?
+            q_i = rearrange(q_i, "... c n_i -> ... (c n_i)")
+            k_i = rearrange(k_i, "... c n_i -> ... (c n_i)")
+            v_i = rearrange(v_i, "... c n_i -> ... (c n_i)")
+            out = simple_attention(q_i, k_i, v_i)  # (B, nh, n_im1 + n_ip1, c * n_i)
+            out = rearrange(out, "... (ch n_i) -> ... ch n_i", n_i=n_i)
+            out_weights[i] += rearrange(out[:, :, :n_im1], "b nh n_im1 ch n_i -> b (nh ch) n_i n_im1")
+            out_weights[i+1] += rearrange(out[:, :, n_im1:], "b nh n_ip1 ch n_i -> b (nh ch) n_ip1 n_i")
+        return WeightSpaceFeatures(tuple(out_weights), wsfeat.biases)

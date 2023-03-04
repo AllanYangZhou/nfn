@@ -3,7 +3,7 @@ from einops import rearrange
 import torch
 from torch import nn
 from nfn.layers import StatFeaturizer
-from nfn.layers import NPLinear, HNPLinear, Pointwise
+from nfn.layers import NPLinear, HNPLinear, Pointwise, NPAttention
 from nfn.common import WeightSpaceFeatures, network_spec_from_wsfeat
 
 
@@ -236,7 +236,19 @@ def test_StatFeaturizer():
     print("StatFeaturizer shape is correct.")
     
 
+def test_NPAttention():
+    layer_sizes = [10, 15, 13, 18, 14, 12]
+    channels = 64
+    spec = network_spec_from_wsfeat(sample_params(1, channels, layer_sizes))
+    layer = NPAttention(spec, 64, 8, dropout=0)
+    assert test_layer_equivariance(layer, layer_sizes, channels)
+    print("NPAttention is equivariant.")
+    assert test_sensitivity_uncoupled(layer, layer_sizes, channels)
+    print("NPAttention is sensitive to uncoupled.")
+
+
 if __name__ == "__main__":
+    test_NPAttention()
     test_Pointwise()
     test_HNPLinear_2layer()
     test_NPLinear()

@@ -76,6 +76,7 @@ class WeightSpaceFeatures(collections.abc.Sequence):
 
     def to(self, device):
         """Moves all tensors to device."""
+        # TODO: nonblocking to
         return WeightSpaceFeatures(tuple(w.to(device) for w in self.weights), tuple(b.to(device) for b in self.biases))
 
     @classmethod
