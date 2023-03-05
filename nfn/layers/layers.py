@@ -345,20 +345,27 @@ class NPAttention(nn.Module):
         wb_out = rearrange(simple_attention(q_avg, k_avg, v_avg), "b nh t c -> b t (nh c)")
         w_out, b_out = wb_out.tensor_split(2, dim=-2)  # (B, n_layers, nh*ch)
         out_weights = [torch.zeros_like(w) for w in wsfeat.weights]
+        out_biases = [torch.zeros_like(b) for b in wsfeat.biases]
         for i in range(len(out_weights)):
             out_weights[i] += rearrange(w_out[:, i], "b C -> b C 1 1")
-        for i in range(len(wsfeat) - 1):
+            out_biases[i] += rearrange(b_out[:, i], "b C -> b C 1")
+        for i in range(len(wsfeat)):
             n_i, n_im1 = wsfeat.weights[i].shape[-2], wsfeat.weights[i].shape[-1]
-            inp1 = rearrange(qkv.weights[i], "... c n_i n_im1 -> ... n_im1 c n_i")
-            inp2 = rearrange(qkv.weights[i+1], "... c n_ip1 n_i -> ... n_ip1 c n_i")
-            inp = torch.cat([inp1, inp2], dim=-3)  # (B, nh, n_im1 + n_ip1, 3c, n_i)
-            q_i, k_i, v_i = inp.tensor_split(3, dim=-2) # (B, nh, n_im1 + n_ip1, c, n_i)
+            Wi_cols = rearrange(qkv.weights[i], "... c n_i n_im1 -> ... n_im1 c n_i")
+            vi = rearrange(qkv.biases[i], "... c n_i -> ... 1 c n_i")
+            inp = [Wi_cols, vi]
+            if i < len(wsfeat) - 1:
+                inp.append(rearrange(qkv.weights[i+1], "... c n_ip1 n_i -> ... n_ip1 c n_i"))
+            inp = torch.cat(inp, dim=-3)  # (B, nh, n_im1 + 1 + ?n_ip1, 3c, n_i)
+            q_i, k_i, v_i = inp.tensor_split(3, dim=-2) # (B, nh, n_im1 + 1 + n_ip1, c, n_i)
             # TODO: can this be simplified?
             q_i = rearrange(q_i, "... c n_i -> ... (c n_i)")
             k_i = rearrange(k_i, "... c n_i -> ... (c n_i)")
             v_i = rearrange(v_i, "... c n_i -> ... (c n_i)")
-            out = simple_attention(q_i, k_i, v_i)  # (B, nh, n_im1 + n_ip1, c * n_i)
+            out = simple_attention(q_i, k_i, v_i)  # (B, nh, n_im1 + 1 + n_ip1, c * n_i)
             out = rearrange(out, "... (ch n_i) -> ... ch n_i", n_i=n_i)
             out_weights[i] += rearrange(out[:, :, :n_im1], "b nh n_im1 ch n_i -> b (nh ch) n_i n_im1")
-            out_weights[i+1] += rearrange(out[:, :, n_im1:], "b nh n_ip1 ch n_i -> b (nh ch) n_ip1 n_i")
-        return WeightSpaceFeatures(tuple(out_weights), wsfeat.biases)
+            out_biases[i] += rearrange(out[:, :, n_im1: n_im1 + 1], "b nh 1 ch n_i -> b (nh ch) n_i")
+            if i < len(wsfeat) - 1:
+                out_weights[i+1] += rearrange(out[:, :, n_im1 + 1:], "b nh n_ip1 ch n_i -> b (nh ch) n_ip1 n_i")
+        return WeightSpaceFeatures(tuple(out_weights), tuple(out_biases))
