@@ -1,6 +1,7 @@
 import math
 import torch
 from torch import nn
+from einops import rearrange
 from nfn.common import WeightSpaceFeatures, NetworkSpec
 
 
@@ -96,3 +97,27 @@ class IOSinusoidalEncoding(nn.Module):
 
     def num_out_chan(self, in_chan):
         return in_chan + (2 * self.num_bands + 1)
+
+
+class LearnedPosEmbedding(nn.Module):
+    def __init__(self, network_spec: NetworkSpec, channels):
+        super().__init__()
+        self.weight_emb = nn.Embedding(len(network_spec), channels)
+        self.bias_emb = nn.Embedding(len(network_spec), channels)
+        num_inp, num_out = network_spec.get_io()
+        self.inp_emb = nn.Embedding(num_inp, channels)
+        self.out_emb = nn.Embedding(num_out, channels)
+
+    def forward(self, wsfeat: WeightSpaceFeatures) -> WeightSpaceFeatures:
+        out_weights, out_biases = [], []
+        for i, (weight, bias) in enumerate(zip(wsfeat.weights, wsfeat.biases)):
+            weight = weight + rearrange(self.weight_emb.weight[i], "c -> 1 c 1 1")
+            bias = bias + rearrange(self.bias_emb.weight[i], "c -> 1 c 1")
+            if i == 0:
+                weight = weight + rearrange(self.inp_emb.weight, "n_in c -> 1 c 1 n_in")
+            if i == len(wsfeat.weights) - 1:
+                weight = weight + rearrange(self.out_emb.weight, "n_out c -> 1 c n_out 1")
+                bias = bias + rearrange(self.out_emb.weight, "n_out c -> 1 c n_out")
+            out_weights.append(weight)
+            out_biases.append(bias)
+        return WeightSpaceFeatures(tuple(out_weights), tuple(out_biases))

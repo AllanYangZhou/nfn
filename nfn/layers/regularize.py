@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 from torch import nn
 from einops import rearrange
 
@@ -94,3 +95,21 @@ class ParamLayerNorm(nn.Module):
                 out_weights.append(w_norm(weight.transpose(-3, -1)).transpose(-3, -1))
                 out_biases.append(v_norm(bias.transpose(-1, -2)).transpose(-1, -2))
         return WeightSpaceFeatures(out_weights, out_biases)
+
+
+class ChannelLayerNorm(nn.Module):
+    def __init__(self, channels, eps=1e-5):
+        super().__init__()
+        self.eps = eps
+        self.gamma = nn.Parameter(torch.ones(channels))
+        self.beta = nn.Parameter(torch.zeros(channels))
+
+    def forward(self, x):
+        # x.shape = (b, c, ...)
+        x = rearrange(x, "b c ... -> b ... c")
+        mean = x.mean(dim=-1, keepdim=True)
+        std = x.std(dim=-1, keepdim=True)
+        x = (x - mean) / (std + self.eps)
+        x = x * self.gamma + self.beta
+        return rearrange(x, "b ... c -> b c ...")
+
