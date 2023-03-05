@@ -303,9 +303,11 @@ class HNPLinear(nn.Module):
         return f"HNPLinear(in_channels={self.c_in}, out_channels={self.c_out}, n_in={self.n_in}, n_out={self.n_out}, num_layers={self.L})"
 
 
-def simple_attention(q, k, v):
+def simple_attention(q, k, v, dropout=None):
     # q, k, v: (..., T, d)
     attn = einsum(q, k, "... t d, ... s d -> ... t s").softmax(dim=-1)
+    if dropout is not None:
+        attn = dropout(attn)
     return einsum(attn, v, "... t s, ... s d -> ... t d")
 
 
@@ -324,13 +326,15 @@ class ChannelLinear(nn.Module):
 class NPAttention(nn.Module):
     def __init__(
         self, network_spec: NetworkSpec, channels,
-        num_heads=8, dropout=0.1
+        num_heads=8, dropout=0,
     ):
         super().__init__()
         assert channels % num_heads == 0, f"channels ({channels}) must be divisible by num_heads ({num_heads})."
+        self.network_spec = network_spec
         self.to_qkv = ChannelLinear(channels, 3 * channels)
         self.nh = num_heads
         self.ch = channels // num_heads  # channels per head
+        self.dropout = nn.Dropout(dropout)
 
     def _global_avgs(self, wsfeat: WeightSpaceFeatures) -> torch.Tensor:
         rowcol_means = [w.mean(dim=(-2, -1)) for w in wsfeat.weights]  # (B, nh, c)
@@ -349,23 +353,30 @@ class NPAttention(nn.Module):
         for i in range(len(out_weights)):
             out_weights[i] += rearrange(w_out[:, i], "b C -> b C 1 1")
             out_biases[i] += rearrange(b_out[:, i], "b C -> b C 1")
-        for i in range(len(wsfeat)):
-            n_i, n_im1 = wsfeat.weights[i].shape[-2], wsfeat.weights[i].shape[-1]
-            Wi_cols = rearrange(qkv.weights[i], "... c n_i n_im1 -> ... n_im1 c n_i")
-            vi = rearrange(qkv.biases[i], "... c n_i -> ... 1 c n_i")
-            inp = [Wi_cols, vi]
+        for i in range(-1, len(wsfeat)):
+            inp = []
+            if i > -1:
+                n_i, n_im1 = wsfeat.weights[i].shape[-2], wsfeat.weights[i].shape[-1]
+                Wi_cols = rearrange(qkv.weights[i], "... c n_i n_im1 -> ... n_im1 c n_i")
+                vi = rearrange(qkv.biases[i], "... c n_i -> ... 1 c n_i")
+                inp.extend([Wi_cols, vi])
             if i < len(wsfeat) - 1:
+                n_i = wsfeat.weights[i+1].shape[-1]
                 inp.append(rearrange(qkv.weights[i+1], "... c n_ip1 n_i -> ... n_ip1 c n_i"))
-            inp = torch.cat(inp, dim=-3)  # (B, nh, n_im1 + 1 + ?n_ip1, 3c, n_i)
+            inp = torch.cat(inp, dim=-3)  # (B, nh, n_im1 + 1 + n_ip1, 3c, n_i)
             q_i, k_i, v_i = inp.tensor_split(3, dim=-2) # (B, nh, n_im1 + 1 + n_ip1, c, n_i)
             # TODO: can this be simplified?
             q_i = rearrange(q_i, "... c n_i -> ... (c n_i)")
             k_i = rearrange(k_i, "... c n_i -> ... (c n_i)")
             v_i = rearrange(v_i, "... c n_i -> ... (c n_i)")
-            out = simple_attention(q_i, k_i, v_i)  # (B, nh, n_im1 + 1 + n_ip1, c * n_i)
+            # (B, nh, n_im1 + 1 + n_ip1, c * n_i)
+            out = simple_attention(q_i, k_i, v_i, dropout=self.dropout)
             out = rearrange(out, "... (ch n_i) -> ... ch n_i", n_i=n_i)
-            out_weights[i] += rearrange(out[:, :, :n_im1], "b nh n_im1 ch n_i -> b (nh ch) n_i n_im1")
-            out_biases[i] += rearrange(out[:, :, n_im1: n_im1 + 1], "b nh 1 ch n_i -> b (nh ch) n_i")
+            idx = 0
+            if i > -1:
+                out_weights[i] += rearrange(out[:, :, :n_im1], "b nh n_im1 ch n_i -> b (nh ch) n_i n_im1")
+                out_biases[i] += rearrange(out[:, :, n_im1: n_im1 + 1], "b nh 1 ch n_i -> b (nh ch) n_i")
+                idx = n_im1 + 1
             if i < len(wsfeat) - 1:
-                out_weights[i+1] += rearrange(out[:, :, n_im1 + 1:], "b nh n_ip1 ch n_i -> b (nh ch) n_ip1 n_i")
+                out_weights[i+1] += rearrange(out[:, :, idx:], "b nh n_ip1 ch n_i -> b (nh ch) n_ip1 n_i")
         return WeightSpaceFeatures(tuple(out_weights), tuple(out_biases))
