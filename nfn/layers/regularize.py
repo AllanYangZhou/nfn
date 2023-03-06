@@ -38,23 +38,17 @@ class SimpleLayerNorm(nn.Module):
         self.channels = channels
         for i in range(len(network_spec)):
             eff_channels = int(channels * np.prod(network_spec.weight_spec[i].shape[2:]))
-            self.add_module(f"norm{i}_w", nn.LayerNorm(normalized_shape=(eff_channels,)))
-            self.add_module(f"norm{i}_v", nn.LayerNorm(normalized_shape=(channels,)))
+            self.add_module(f"norm{i}_w", ChannelLayerNorm(eff_channels))
+            self.add_module(f"norm{i}_v", ChannelLayerNorm(channels))
 
     def forward(self, wsfeat: WeightSpaceFeatures) -> WeightSpaceFeatures:
         wsfeat = shape_wsfeat_symmetry(wsfeat, self.network_spec)
-        in_weights, in_biases = [], []
-        for weight, bias in wsfeat:
-            in_weights.append(weight.transpose(-3, -1))
-            in_biases.append(bias.transpose(-1, -2))
         out_weights, out_biases = [], []
-        for i, (weight, bias) in enumerate(zip(in_weights, in_biases)):
+        for i, (weight, bias) in enumerate(wsfeat):
             w_norm = getattr(self, f"norm{i}_w")
             v_norm = getattr(self, f"norm{i}_v")
             out_weights.append(w_norm(weight))
             out_biases.append(v_norm(bias))
-        out_weights = [w.transpose(-3, -1) for w in out_weights]
-        out_biases = [b.transpose(-1, -2) for b in out_biases]
         return unshape_wsfeat_symmetry(WeightSpaceFeatures(out_weights, out_biases), self.network_spec)
 
     def __repr__(self):
