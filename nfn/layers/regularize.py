@@ -106,10 +106,8 @@ class ChannelLayerNorm(nn.Module):
 
     def forward(self, x):
         # x.shape = (b, c, ...)
-        x = rearrange(x, "b c ... -> b ... c")
-        mean = x.mean(dim=-1, keepdim=True)
-        std = x.std(dim=-1, keepdim=True)
+        mean = x.mean(dim=1, keepdim=True)
+        std = x.std(dim=1, keepdim=True)
         x = (x - mean) / (std + self.eps)
-        x = x * self.gamma + self.beta
-        return rearrange(x, "b ... c -> b c ...")
-
+        idx = (None, Ellipsis, *((None,) * (x.dim() - 2)))  # right pad dimensions.
+        return x * self.gamma[idx] + self.beta[idx]
