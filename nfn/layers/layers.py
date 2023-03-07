@@ -1,7 +1,9 @@
+import math
 import numpy as np
 import torch
 from torch import nn
-from einops import rearrange, einsum
+from einops import rearrange
+from einops.layers.torch import Rearrange
 from nfn.common import NetworkSpec, WeightSpaceFeatures
 from nfn.layers.layer_utils import set_init_, shape_wsfeat_symmetry, unshape_wsfeat_symmetry
 
@@ -305,10 +307,10 @@ class HNPLinear(nn.Module):
 
 def simple_attention(q, k, v, dropout=None):
     # q, k, v: (..., T, d)
-    attn = einsum(q, k, "... t d, ... s d -> ... t s").softmax(dim=-1)
+    attn = torch.softmax(q @ k.transpose(-2, -1) / math.sqrt(k.shape[-1]), dim=-1)
     if dropout is not None:
         attn = dropout(attn)
-    return einsum(attn, v, "... t s, ... s d -> ... t d")
+    return attn @ v
 
 
 class ChannelLinear(nn.Module):
@@ -316,11 +318,13 @@ class ChannelLinear(nn.Module):
     def __init__(self, in_channels, out_channels, bias=True):
         super().__init__()
         self.linear = nn.Linear(in_channels, out_channels, bias=bias)
+        self.channels_last = Rearrange("b c ... -> b ... c")
+        self.channels_first = Rearrange("b ... c -> b c ...")
 
     def forward(self, x):
-        x = rearrange(x, "b c ... -> b ... c")
+        x = self.channels_last(x)
         x = self.linear(x)
-        return rearrange(x, "b ... c -> b c ...")
+        return self.channels_first(x)
 
 
 class NPAttention(nn.Module):
@@ -335,48 +339,53 @@ class NPAttention(nn.Module):
         self.nh = num_heads
         self.ch = channels // num_heads  # channels per head
         self.dropout = nn.Dropout(dropout)
-
-    def _global_avgs(self, wsfeat: WeightSpaceFeatures) -> torch.Tensor:
-        rowcol_means = [w.mean(dim=(-2, -1)) for w in wsfeat.weights]  # (B, nh, c)
-        bias_means = [b.mean(dim=-1) for b in wsfeat.biases]  # (B, nh, c)
-        return torch.stack(rowcol_means + bias_means, dim=-2)  # (B, nh, 2 * n_layers, c)
+        self.split_heads = Rearrange("b (nh ch) ... -> b nh ch ...", nh=self.nh, ch=3*self.ch)
+        self.combine_nh_nc = Rearrange("b nh t c -> b t (nh c)")
+        self.permute_Wi_col = Rearrange("... c n_i n_im1 -> ... n_im1 c n_i")
+        self.permute_Wip1 = Rearrange("... c n_ip1 n_i -> ... n_ip1 c n_i")
 
     def forward(self, wsfeat: WeightSpaceFeatures) -> WeightSpaceFeatures:
-        qkv = wsfeat.map(self.to_qkv)
-        qkv = qkv.map(lambda x: rearrange(x, "b (nh ch) ... -> b nh ch ...", nh=self.nh, ch=3 * self.ch))
-        qkv_avgs = self._global_avgs(qkv)  # (B, nh, 2 * n_layers, 3ch)
-        q_avg, k_avg, v_avg = qkv_avgs.tensor_split(3, dim=-1)  # (B, nh, 2 * n_layers, ch)
-        wb_out = rearrange(simple_attention(q_avg, k_avg, v_avg), "b nh t c -> b t (nh c)")
-        w_out, b_out = wb_out.tensor_split(2, dim=-2)  # (B, n_layers, nh*ch)
         out_weights = [torch.zeros_like(w) for w in wsfeat.weights]
         out_biases = [torch.zeros_like(b) for b in wsfeat.biases]
+        qkv = wsfeat.map(self.to_qkv)
+        qkv = qkv.map(self.split_heads)
+        rowcol_means = [w.mean(dim=(-2, -1)) for w in qkv.weights]  # (B, nh, c)
+        bias_means = [b.mean(dim=-1) for b in qkv.biases]  # (B, nh, c)
+        qkv_avgs = torch.stack(rowcol_means + bias_means, dim=-2)  # (B, nh, 2 * n_layers, 3ch)
+        q_avg, k_avg, v_avg = qkv_avgs.tensor_split(3, dim=-1)  # (B, nh, 2 * n_layers, ch)
+        wb_out = self.combine_nh_nc(simple_attention(q_avg, k_avg, v_avg))
+        w_out, b_out = wb_out.tensor_split(2, dim=-2)  # (B, n_layers, nh*ch)
         for i in range(len(out_weights)):
-            out_weights[i] += rearrange(w_out[:, i], "b C -> b C 1 1")
-            out_biases[i] += rearrange(b_out[:, i], "b C -> b C 1")
+            out_weights[i] += w_out[:, i].unsqueeze(-1).unsqueeze(-1)
+            out_biases[i] += b_out[:, i].unsqueeze(-1)
         for i in range(-1, len(wsfeat)):
             inp = []
             if i > -1:
                 n_i, n_im1 = wsfeat.weights[i].shape[-2], wsfeat.weights[i].shape[-1]
-                Wi_cols = rearrange(qkv.weights[i], "... c n_i n_im1 -> ... n_im1 c n_i")
-                vi = rearrange(qkv.biases[i], "... c n_i -> ... 1 c n_i")
+                Wi_cols = self.permute_Wi_col(qkv.weights[i])
+                vi = qkv.biases[i].unsqueeze(-3)  # (B, nh, 1, c, n_i)
                 inp.extend([Wi_cols, vi])
             if i < len(wsfeat) - 1:
                 n_i = wsfeat.weights[i+1].shape[-1]
-                inp.append(rearrange(qkv.weights[i+1], "... c n_ip1 n_i -> ... n_ip1 c n_i"))
+                inp.append(self.permute_Wip1(qkv.weights[i+1]))
             inp = torch.cat(inp, dim=-3)  # (B, nh, n_im1 + 1 + n_ip1, 3c, n_i)
             q_i, k_i, v_i = inp.tensor_split(3, dim=-2) # (B, nh, n_im1 + 1 + n_ip1, c, n_i)
             # TODO: can this be simplified?
-            q_i = rearrange(q_i, "... c n_i -> ... (c n_i)")
-            k_i = rearrange(k_i, "... c n_i -> ... (c n_i)")
-            v_i = rearrange(v_i, "... c n_i -> ... (c n_i)")
+            q_i = torch.flatten(q_i, start_dim=-2)
+            k_i = torch.flatten(k_i, start_dim=-2)
+            v_i = torch.flatten(v_i, start_dim=-2)
             # (B, nh, n_im1 + 1 + n_ip1, c * n_i)
             out = simple_attention(q_i, k_i, v_i, dropout=self.dropout)
-            out = rearrange(out, "... (ch n_i) -> ... ch n_i", n_i=n_i)
+            # ... (ch n_i) -> ... ch n_i
+            out = out.view(*out.shape[:-1], self.ch, n_i)
             idx = 0
             if i > -1:
-                out_weights[i] += rearrange(out[:, :, :n_im1], "b nh n_im1 ch n_i -> b (nh ch) n_i n_im1")
-                out_biases[i] += rearrange(out[:, :, n_im1: n_im1 + 1], "b nh 1 ch n_i -> b (nh ch) n_i")
+                # b nh n_im1 ch n_i -> b (nh ch) n_i n_im1
+                out_weights[i] += torch.flatten(out[:, :, :n_im1].permute(0, 1, 3, 4, 2), start_dim=1, end_dim=2)
+                # b nh 1 ch n_i -> b (nh ch) n_i
+                out_biases[i] += torch.flatten(out[:, :, n_im1: n_im1 + 1].squeeze(2), start_dim=1, end_dim=2)
                 idx = n_im1 + 1
             if i < len(wsfeat) - 1:
-                out_weights[i+1] += rearrange(out[:, :, idx:], "b nh n_ip1 ch n_i -> b (nh ch) n_ip1 n_i")
+                # b nh n_ip1 ch n_i -> b (nh ch) n_ip1 n_i
+                out_weights[i+1] += torch.flatten(out[:, :, idx:].transpose(2, 3), start_dim=1, end_dim=2)
         return WeightSpaceFeatures(tuple(out_weights), tuple(out_biases))

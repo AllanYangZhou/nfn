@@ -2,6 +2,7 @@ import numpy as np
 import torch
 from torch import nn
 from einops import rearrange
+from einops.layers.torch import Rearrange
 
 from nfn.common import WeightSpaceFeatures, NetworkSpec
 from nfn.layers.layer_utils import shape_wsfeat_symmetry, unshape_wsfeat_symmetry
@@ -97,11 +98,14 @@ class ChannelLayerNorm(nn.Module):
         self.eps = eps
         self.gamma = nn.Parameter(torch.ones(channels))
         self.beta = nn.Parameter(torch.zeros(channels))
+        self.channels_last = Rearrange("b c ... -> b ... c")
+        self.channels_first = Rearrange("b ... c -> b c ...")
 
     def forward(self, x):
         # x.shape = (b, c, ...)
-        mean = x.mean(dim=1, keepdim=True)
-        std = x.std(dim=1, keepdim=True)
+        x = self.channels_last(x)
+        mean = x.mean(dim=-1, keepdim=True)
+        std = x.std(dim=-1, keepdim=True)
         x = (x - mean) / (std + self.eps)
-        idx = (None, Ellipsis, *((None,) * (x.dim() - 2)))  # right pad dimensions.
-        return x * self.gamma[idx] + self.beta[idx]
+        out = self.channels_first(x * self.gamma + self.beta)
+        return out
