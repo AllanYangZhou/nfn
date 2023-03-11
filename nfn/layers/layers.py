@@ -88,11 +88,12 @@ class Pointwise(nn.Module):
         self.in_channels = in_channels
         self.out_channels = out_channels
         # register num_layers in_channels -> out_channels linear layers
+        self.weight_maps, self.bias_maps = nn.ModuleList(), nn.ModuleList()
         filter_facs = [int(np.prod(spec.shape[2:])) for spec in network_spec.weight_spec]
         for i in range(len(network_spec)):
             fac_i = filter_facs[i]
-            self.add_module(f"layer_{i}", nn.Conv2d(fac_i * in_channels, fac_i * out_channels, 1))
-            self.add_module(f"bias_{i}", nn.Conv1d(in_channels, out_channels, 1))
+            self.weight_maps.append(nn.Conv2d(fac_i * in_channels, fac_i * out_channels, 1))
+            self.bias_maps.append(nn.Conv1d(in_channels, out_channels, 1))
 
     def forward(self, wsfeat: WeightSpaceFeatures):
         wsfeat = shape_wsfeat_symmetry(wsfeat, self.network_spec)
@@ -100,9 +101,10 @@ class Pointwise(nn.Module):
         # each tensor is reshaped to (B, nrow * ncol, C_in), passed through a linear
         # layer, then reshaped back to (B, C_out, nrow, ncol)
         out_weights, out_biases = [], []
-        for i, (weight, bias) in enumerate(wsfeat):
-            out_weights.append(getattr(self, f"layer_{i}")(weight))
-            out_biases.append(getattr(self, f"bias_{i}")(bias))
+        for i in range(len(self.network_spec)):
+            weight, bias = wsfeat[i]
+            out_weights.append(self.weight_maps[i](weight))
+            out_biases.append(self.bias_maps[i](bias))
         return unshape_wsfeat_symmetry(WeightSpaceFeatures(out_weights, out_biases), self.network_spec)
 
     def __repr__(self):
