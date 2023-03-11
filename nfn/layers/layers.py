@@ -9,23 +9,16 @@ from nfn.layers.layer_utils import set_init_, shape_wsfeat_symmetry, unshape_wsf
 
 
 class NPPool(nn.Module):
-    def __init__(self, network_spec: NetworkSpec, agg="mean"):
+    def __init__(self, network_spec: NetworkSpec):
         super().__init__()
         self.network_spec = network_spec
-        if agg == "mean":
-            self.agg = lambda x, dim: x.mean(dim=dim)
-        elif agg == "max":
-            self.agg = lambda x, dim: x.amax(dim=dim)
-        elif agg == "sum":
-            self.agg = lambda x, dim: x.sum(dim=dim)
-        else:
-            raise NotImplementedError(f"Aggregation {agg} not implemented.")
 
     def forward(self, wsfeat: WeightSpaceFeatures) -> torch.Tensor:
         out = []
-        for weight, bias in wsfeat:
-            out.append(self.agg(weight, dim=(2,3)).unsqueeze(-1))
-            out.append(self.agg(bias, dim=-1).unsqueeze(-1))
+        for i in range(len(self.network_spec)):
+            weight, bias = wsfeat[i]
+            out.append(weight.mean(dim=(2,3)).unsqueeze(-1))
+            out.append(bias.mean(dim=-1).unsqueeze(-1))
         return torch.cat([torch.flatten(o, start_dim=2) for o in out], dim=-1)
 
     @staticmethod
@@ -42,26 +35,19 @@ class HNPPool(nn.Module):
     def __init__(self, network_spec: NetworkSpec, agg="mean"):
         super().__init__()
         self.network_spec = network_spec
-        if agg == "mean":
-            self.agg = lambda x, dim: x.mean(dim=dim)
-        elif agg == "max":
-            self.agg = lambda x, dim: x.amax(dim=dim)
-        elif agg == "sum":
-            self.agg = lambda x, dim: x.sum(dim=dim)
-        else:
-            raise NotImplementedError(f"Aggregation {agg} not implemented.")
 
     def forward(self, wsfeat: WeightSpaceFeatures) -> torch.Tensor:
         out = []
-        for i, (weight, bias) in enumerate(wsfeat):
+        for i in range(len(self.network_spec)):
+            weight, bias = wsfeat[i]
             if i == 0:
-                out.append(self.agg(weight, dim=2))  # average over rows
+                out.append(weight.mean(dim=2))  # average over rows
             elif i == len(wsfeat) - 1:
-                out.append(self.agg(weight, dim=3))  # average over cols
+                out.append(weight.mean(dim=3))  # average over cols
             else:
-                out.append(self.agg(weight, dim=(2,3)).unsqueeze(-1))
+                out.append(weight.mean(dim=(2,3)).unsqueeze(-1))
             if i == len(wsfeat) - 1: out.append(bias)
-            else: out.append(self.agg(bias, dim=-1).unsqueeze(-1))
+            else: out.append(bias.mean(dim=-1).unsqueeze(-1))
         return torch.cat([torch.flatten(o, start_dim=2) for o in out], dim=-1)
 
     @staticmethod

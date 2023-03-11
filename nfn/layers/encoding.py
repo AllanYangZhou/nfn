@@ -1,7 +1,7 @@
 import math
 import torch
 from torch import nn
-from einops import rearrange
+from einops.layers.torch import Rearrange
 from nfn.common import WeightSpaceFeatures, NetworkSpec
 
 
@@ -13,14 +13,13 @@ class GaussianFourierFeatureTransform(nn.Module):
 
     def __init__(self, network_spec, in_channels, mapping_size=256, scale=10):
         super().__init__()
-        del network_spec
+        self.network_spec = network_spec
         self._num_input_channels = in_channels
         self._mapping_size = mapping_size
         self.out_channels = mapping_size * 2
         self.register_buffer("_B", torch.randn((in_channels, mapping_size)) * scale)
 
     def encode_tensor(self, x):
-        assert len(x.shape) >= 3
         # Put channels dimension last.
         x = (x.transpose(1, -1) @ self._B).transpose(1, -1)
         x = 2 * math.pi * x
@@ -28,7 +27,8 @@ class GaussianFourierFeatureTransform(nn.Module):
 
     def forward(self, wsfeat):
         out_weights, out_biases = [], []
-        for (weight, bias) in wsfeat:
+        for i in range(len(self.network_spec)):
+            weight, bias = wsfeat[i]
             out_weights.append(self.encode_tensor(weight))
             out_biases.append(self.encode_tensor(bias))
         return WeightSpaceFeatures(out_weights, out_biases)
@@ -102,22 +102,27 @@ class IOSinusoidalEncoding(nn.Module):
 class LearnedPosEmbedding(nn.Module):
     def __init__(self, network_spec: NetworkSpec, channels):
         super().__init__()
+        self.network_spec = network_spec
         self.weight_emb = nn.Embedding(len(network_spec), channels)
         self.bias_emb = nn.Embedding(len(network_spec), channels)
         num_inp, num_out = network_spec.get_io()
         self.inp_emb = nn.Embedding(num_inp, channels)
         self.out_emb = nn.Embedding(num_out, channels)
+        self.inp_weight_arrange = Rearrange("n_in c -> 1 c 1 n_in")
+        self.out_weight_arrange = Rearrange("n_out c -> 1 c n_out 1")
+        self.out_bias_arrange = Rearrange("n_out c -> 1 c n_out")
 
     def forward(self, wsfeat: WeightSpaceFeatures) -> WeightSpaceFeatures:
         out_weights, out_biases = [], []
-        for i, (weight, bias) in enumerate(zip(wsfeat.weights, wsfeat.biases)):
-            weight = weight + rearrange(self.weight_emb.weight[i], "c -> 1 c 1 1")
-            bias = bias + rearrange(self.bias_emb.weight[i], "c -> 1 c 1")
+        for i in range(len(self.network_spec)):
+            weight, bias = wsfeat[i]
+            weight = weight + self.weight_emb.weight[i][None, :, None, None]
+            bias = bias + self.bias_emb.weight[i][None, :, None]
             if i == 0:
-                weight = weight + rearrange(self.inp_emb.weight, "n_in c -> 1 c 1 n_in")
+                weight = weight + self.inp_weight_arrange(self.inp_emb.weight)
             if i == len(wsfeat.weights) - 1:
-                weight = weight + rearrange(self.out_emb.weight, "n_out c -> 1 c n_out 1")
-                bias = bias + rearrange(self.out_emb.weight, "n_out c -> 1 c n_out")
+                weight = weight + self.out_weight_arrange(self.out_emb.weight)
+                bias = bias + self.out_bias_arrange(self.out_emb.weight)
             out_weights.append(weight)
             out_biases.append(bias)
         return WeightSpaceFeatures(tuple(out_weights), tuple(out_biases))
