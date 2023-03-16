@@ -14,9 +14,10 @@ class GaussianFourierFeatureTransform(nn.Module):
     def __init__(self, network_spec, in_channels, mapping_size=256, scale=10):
         super().__init__()
         self.network_spec = network_spec
-        self._num_input_channels = in_channels
+        self.in_channels = in_channels
         self._mapping_size = mapping_size
         self.out_channels = mapping_size * 2
+        self.scale = scale
         self.register_buffer("_B", torch.randn((in_channels, mapping_size)) * scale)
 
     def encode_tensor(self, x):
@@ -32,6 +33,9 @@ class GaussianFourierFeatureTransform(nn.Module):
             out_weights.append(self.encode_tensor(weight))
             out_biases.append(self.encode_tensor(bias))
         return WeightSpaceFeatures(out_weights, out_biases)
+
+    def __repr__(self):
+        return f"GaussianFourierFeatureTransform(in_channels={self.in_channels}, mapping_size={self._mapping_size}, scale={self.scale})"
 
 
 def fourier_encode(x, max_freq, num_bands = 4):
@@ -102,6 +106,7 @@ class IOSinusoidalEncoding(nn.Module):
 class LearnedPosEmbedding(nn.Module):
     def __init__(self, network_spec: NetworkSpec, channels):
         super().__init__()
+        self.channels = channels
         self.network_spec = network_spec
         self.weight_emb = nn.Embedding(len(network_spec), channels)
         self.bias_emb = nn.Embedding(len(network_spec), channels)
@@ -126,3 +131,6 @@ class LearnedPosEmbedding(nn.Module):
             out_weights.append(weight)
             out_biases.append(bias)
         return WeightSpaceFeatures(tuple(out_weights), tuple(out_biases))
+
+    def __repr__(self):
+        return f"LearnedPosEmbedding(channels={self.channels})"

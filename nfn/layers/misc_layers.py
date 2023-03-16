@@ -108,3 +108,6 @@ class TupleOp(nn.Module):
         out_weights = [self.op(w) for w in wsfeat.weights]
         out_bias = [self.op(b) for b in wsfeat.biases]
         return WeightSpaceFeatures(out_weights, out_bias)
+
+    def __repr__(self):
+        return f"TupleOp({self.op})"

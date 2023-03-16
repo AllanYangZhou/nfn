@@ -295,6 +295,8 @@ class HNPLinear(nn.Module):
 
 def simple_attention(q, k, v, dropout=None):
     # q, k, v: (..., T, d)
+    # TODO: consider replacing with F.scaled_dot_product_attention. But probably won't get
+    # Flash Attention speedup unless we have A100 @ 16bit: https://github.com/pytorch/pytorch/pull/81434#issuecomment-1451120687.
     attn = torch.softmax(q @ k.transpose(-2, -1) / math.sqrt(k.shape[-1]), dim=-1)
     if dropout is not None:
         attn = dropout(attn)
@@ -377,3 +379,6 @@ class NPAttention(nn.Module):
                 # b nh n_ip1 ch n_i -> b (nh ch) n_ip1 n_i
                 out_weights[i+1] += torch.flatten(out[:, :, idx:].transpose(2, 3), start_dim=1, end_dim=2)
         return WeightSpaceFeatures(tuple(out_weights), tuple(out_biases))
+
+    def __repr__(self):
+        return f"NPAttention(channels={self.ch * self.nh}, num_heads={self.nh}, dropout={self.dropout.p})"
