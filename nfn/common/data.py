@@ -142,3 +142,13 @@ def network_spec_from_wsfeat(wsfeat: WeightSpaceFeatures, set_all_dims=False) ->
             bias_shape = (bias.shape[-1],)
         bias_specs.append(ArraySpec(bias_shape))
     return NetworkSpec(weight_specs, bias_specs)
+
+
+def params_to_func_params(params: WeightSpaceFeatures):
+    """Convert our WeightSpaceFeatures object to a tuple of parameters for the functional model."""
+    out_params = []
+    for weight, bias in params:
+        assert weight.shape[1] == bias.shape[1] == 1
+        out_params.append(weight.squeeze(1))
+        out_params.append(bias.squeeze(1))
+    return tuple(out_params)

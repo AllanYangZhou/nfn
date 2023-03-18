@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch import nn
 from nfn.layers.layer_utils import shape_wsfeat_symmetry
 from nfn.common import NetworkSpec, WeightSpaceFeatures
@@ -32,11 +33,11 @@ class UnflattenWeights(nn.Module):
         for weight_spec, bias_spec in zip(self.network_spec.weight_spec, self.network_spec.bias_spec):
             num_wts = np.prod(weight_spec.shape)
             # reshape to (bs, 1, *weight_spec.shape) where 1 is channels.
-            wt = x[:, curr_idx:curr_idx + num_wts].view(-1, *weight_spec.shape).unsqueeze(1)
+            wt = x[:, curr_idx:curr_idx + num_wts].reshape(-1, *weight_spec.shape).unsqueeze(1)
             out_weights.append(wt)
             curr_idx += num_wts
             num_bs = np.prod(bias_spec.shape)
-            bs = x[:, curr_idx:curr_idx + num_bs].view(-1, *bias_spec.shape).unsqueeze(1)
+            bs = x[:, curr_idx:curr_idx + num_bs].reshape(-1, *bias_spec.shape).unsqueeze(1)
             out_biases.append(bs)
             curr_idx += num_bs
         return WeightSpaceFeatures(out_weights, out_biases)
@@ -111,3 +112,26 @@ class TupleOp(nn.Module):
 
     def __repr__(self):
         return f"TupleOp({self.op})"
+
+
+class CrossAttnEncoder(nn.Module):
+    def __init__(self, network_spec, channels, num_latents):
+        super().__init__()
+        self.embeddings = nn.Parameter(torch.randn(num_latents, channels))
+        self.flatten = FlattenWeights(network_spec)
+
+    def forward(self, params):
+        flat_params = self.flatten(params)
+        # (B, num_latents, C)
+        return F.scaled_dot_product_attention(self.embeddings, flat_params, flat_params)
+
+
+class CrossAttnDecoder(nn.Module):
+    def __init__(self, network_spec, channels, num_params):
+        super().__init__()
+        self.embeddings = nn.Parameter(torch.randn(num_params, channels))
+        self.unflatten = UnflattenWeights(network_spec)
+
+    def forward(self, latents):
+        # (B, num_latents, C)
+        return self.unflatten(F.scaled_dot_product_attention(self.embeddings, latents, latents))
