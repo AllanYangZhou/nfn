@@ -1,0 +1,5 @@
+defaults:
+  - equiv
+  - pos_enc_cls: sin
+
+mode: NP
