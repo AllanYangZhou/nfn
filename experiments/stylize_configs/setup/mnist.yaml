@@ -1,0 +1,3 @@
+# @package _global_
+siren_path: ./experiments/data/siren_mnist_wts
+style: dilate
