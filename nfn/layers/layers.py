@@ -32,7 +32,7 @@ class NPPool(nn.Module):
 
 
 class HNPPool(nn.Module):
-    def __init__(self, network_spec: NetworkSpec, agg="mean"):
+    def __init__(self, network_spec: NetworkSpec):
         super().__init__()
         self.network_spec = network_spec
 
