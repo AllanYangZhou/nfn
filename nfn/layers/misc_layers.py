@@ -25,19 +25,22 @@ class UnflattenWeights(nn.Module):
     def __init__(self, network_spec: NetworkSpec):
         super().__init__()
         self.network_spec = network_spec
+        self.num_wts, self.num_bs = [], []
+        for weight_spec, bias_spec in zip(self.network_spec.weight_spec, self.network_spec.bias_spec):
+            self.num_wts.append(np.prod(weight_spec.shape))
+            self.num_bs.append(np.prod(bias_spec.shape))
 
     def forward(self, x: torch.Tensor) -> WeightSpaceFeatures:
         # x.shape == (bs, num weights and biases, n_chan)
         n_chan = x.shape[2]
         out_weights, out_biases = [], []
         curr_idx = 0
-        for weight_spec, bias_spec in zip(self.network_spec.weight_spec, self.network_spec.bias_spec):
-            num_wts = np.prod(weight_spec.shape)
+        for i, (weight_spec, bias_spec) in enumerate(zip(self.network_spec.weight_spec, self.network_spec.bias_spec)):
+            num_wts, num_bs = self.num_wts[i], self.num_bs[i]
             # reshape to (bs, 1, *weight_spec.shape) where 1 is channels.
             wt = x[:, curr_idx:curr_idx + num_wts].transpose(1, 2).reshape(-1, n_chan, *weight_spec.shape)
             out_weights.append(wt)
             curr_idx += num_wts
-            num_bs = np.prod(bias_spec.shape)
             bs = x[:, curr_idx:curr_idx + num_bs].transpose(1, 2).reshape(-1, n_chan, *bias_spec.shape)
             out_biases.append(bs)
             curr_idx += num_bs
