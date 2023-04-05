@@ -148,7 +148,8 @@ def params_to_func_params(params: WeightSpaceFeatures):
     """Convert our WeightSpaceFeatures object to a tuple of parameters for the functional model."""
     out_params = []
     for weight, bias in params:
-        assert weight.shape[1] == bias.shape[1] == 1
-        out_params.append(weight.squeeze(1))
-        out_params.append(bias.squeeze(1))
+        if weight.shape[1] == 1:
+            weight, bias = weight.squeeze(1), bias.squeeze(1)
+        out_params.append(weight)
+        out_params.append(bias)
     return tuple(out_params)
