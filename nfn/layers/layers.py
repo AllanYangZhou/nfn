@@ -155,7 +155,8 @@ class NPLinear(nn.Module):
         bias_means = [b.mean(dim=-1) for b in biases]  # (B, C_in)
         wb_means = torch.cat(rowcol_means + bias_means, dim=-1)  # (B, 2 * C_in * n_layers)
         out_weights, out_biases = [], []
-        for i, (weight, bias) in enumerate(wsfeat):
+        for i in range(len(self.network_spec)):
+            weight, bias = wsfeat[i]
             z1 = getattr(self, f"layer_{i}")(weight)  # (B, C_out, nrow, ncol)
             z2 = getattr(self, f"layer_{i}_rc")(wb_means)[..., None, None]
             row_bdcst = [row_means[i]]  # (B, C_in, ncol)
@@ -248,7 +249,8 @@ class HNPLinear(nn.Module):
         rc_inp = torch.cat(rc_means + bias_means + [rm0, cmL, final_bias], dim=-1)
 
         out_weights, out_biases = [], []
-        for i, (weight, bias) in enumerate(wsfeat):
+        for i in range(self.L):
+            weight, bias = wsfeat[i]
             if i == 0:
                 rpt = [rearrange(weight, "b c_in nrow ncol -> b (c_in ncol) nrow"), row_means[1], bias]
                 if i+1 == self.L - 1:
