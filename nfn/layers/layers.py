@@ -234,6 +234,15 @@ class HNPLinear(nn.Module):
                 self.add_module(f"bias_{i}", nn.Conv1d(col_in, out_channels, 1))
                 self.add_module(f"bias_{i}_rc", nn.Linear(n_rc_inp * in_channels, out_channels))
                 set_init_(getattr(self, f"bias_{i}"), getattr(self, f"bias_{i}_rc"))
+        self.rearr1_wt1 = Rearrange("b c_in nrow ncol -> b (c_in ncol) nrow")
+        self.rearr1_wtL = Rearrange("b c_in n_out nrow -> b (c_in n_out) nrow")
+        self.rearr1_outwt = Rearrange("b (c_out ncol) nrow -> b c_out nrow ncol", ncol=n_in)
+        self.rearrL_wtL = Rearrange("b c_in nrow ncol -> b (c_in nrow) ncol")
+        self.rearrL_wt1 = Rearrange("b c_in ncol n_in -> b (c_in n_in) ncol")
+        self.rearrL_outwt = Rearrange("b (c_out nrow) ncol -> b c_out nrow ncol", nrow=n_out)
+        self.rearrL_outbs = Rearrange("b (c_out nrow) -> b c_out nrow", nrow=n_out)
+        self.rearr2_wt1 = Rearrange("b c ncol n_in -> b (c n_in) ncol")
+        self.rearrLm1_wtL = Rearrange("b c n_out nrow -> b (c n_out) nrow")
 
     def forward(self, wsfeat: WeightSpaceFeatures):
         wsfeat = shape_wsfeat_symmetry(wsfeat, self.network_spec)
@@ -242,9 +251,9 @@ class HNPLinear(nn.Module):
         row_means = [w.mean(dim=-2) for w in weights]  # shapes: (B, C_in, ncol_i=nrow_i-1)
         rc_means = [w.mean(dim=(-1, -2)) for w in weights]  # shapes: (B, C_in)
         bias_means = [b.mean(dim=-1) for b in biases]  # shapes: (B, C_in)
-        rm0 = rearrange(row_means[0], "b c_in ncol -> b (c_in ncol)")
-        cmL = rearrange(col_means[-1], "b c_in nrowL -> b (c_in nrowL)")
-        final_bias = rearrange(biases[-1], "b c_in nrow -> b (c_in nrow)")
+        rm0 = torch.flatten(row_means[0], start_dim=-2)  # b c_in ncol -> b (c_in ncol)
+        cmL = torch.flatten(col_means[-1], start_dim=-2)  # b c_in nrowL -> b (c_in nrowL)
+        final_bias = torch.flatten(biases[-1], start_dim=-2)  # b c_in nrow -> b (c_in nrow)
         # (B, C_in * (2 * L + n_in + 2 * n_out))
         rc_inp = torch.cat(rc_means + bias_means + [rm0, cmL, final_bias], dim=-1)
 
@@ -252,33 +261,33 @@ class HNPLinear(nn.Module):
         for i in range(self.L):
             weight, bias = wsfeat[i]
             if i == 0:
-                rpt = [rearrange(weight, "b c_in nrow ncol -> b (c_in ncol) nrow"), row_means[1], bias]
+                rpt = [self.rearr1_wt1(weight), row_means[1], bias]
                 if i+1 == self.L - 1:
-                    rpt.append(rearrange(weights[-1], "b c_in n_out nrow -> b (c_in n_out) nrow"))
+                    rpt.append(self.rearr1_wtL(weights[-1]))
                 rpt = torch.cat(rpt, dim=-2)  # repeat ptwise across rows
                 z1 = self.w0_rpt(rpt)
                 z2 = self.w0_rbdcst(rc_inp)[..., None]  # (b, c_out * ncol, 1)
-                z = rearrange(z1 + z2, "b (c_out ncol) nrow -> b c_out nrow ncol", ncol=weight.shape[-1])
+                z = self.rearr1_outwt(z1 + z2)
                 u1 = self.bias_0(rpt)  # (B, C_out, nrow)
                 u2 = self.bias_0_rc(rc_inp).unsqueeze(-1)  # (B, C_out, 1)
                 u = u1 + u2
             elif i == self.L - 1:
-                cpt = [rearrange(weight, "b c_in nrow ncol -> b (c_in nrow) ncol"), col_means[-2]]  # b c_in ncol 
+                cpt = [self.rearrL_wtL(weight), col_means[-2]]  # b c_in ncol 
                 if i - 1 == 0:
-                    cpt.append(rearrange(weights[0], "b c_in ncol n_in -> b (c_in n_in) ncol"))
+                    cpt.append(self.rearrL_wt1(weights[0]))
                 z1 = self.wfin_cpt(torch.cat(cpt, dim=-2))  # (B, C_out * nrow, ncol)
                 z2 = self.wfin_cbdcst(rc_inp)[..., None]  # (b, c_out * nrow, 1)
-                z = rearrange(z1 + z2, "b (c_out nrow) ncol -> b c_out nrow ncol", nrow=weight.shape[-2])
-                u = rearrange(self.bias_fin_rc(rc_inp), "b (c_out nrow) -> b c_out nrow", nrow=weight.shape[-2])
+                z = self.rearrL_outwt(z1 + z2)
+                u = self.rearrL_outbs(self.bias_fin_rc(rc_inp))
             else:
                 z1 = getattr(self, f"layer_{i}")(weight)  # (B, C_out, nrow, ncol)
                 z2 = getattr(self, f"layer_{i}_rc")(rc_inp)[..., None, None]
                 row_bdcst = [row_means[i], col_means[i-1], biases[i-1]]
                 col_bdcst = [col_means[i], bias, row_means[i+1]]
                 if i == 1:
-                    row_bdcst.append(rearrange(weights[0], "b c ncol n_in -> b (c n_in) ncol"))
+                    row_bdcst.append(self.rearr2_wt1(weights[0]))
                 if i == len(weights) - 2:
-                    col_bdcst.append(rearrange(weights[-1], "b c n_out nrow -> b (c n_out) nrow"))
+                    col_bdcst.append(self.rearrLm1_wtL(weights[-1]))
                 row_bdcst = torch.cat(row_bdcst, dim=-2)  # (B, (3 + ?n_in) * C_in, ncol)
                 col_bdcst = torch.cat(col_bdcst, dim=-2)  # (B, (3 + ?n_out) * C_in, nrow)
                 z3 = getattr(self, f"layer_{i}_r")(row_bdcst).unsqueeze(-2)  # (B, C_out, 1, ncol)
