@@ -76,7 +76,8 @@ class IOSinusoidalEncoding(nn.Module):
         d = 2 * self.num_bands + 1
 
         out_weights, out_biases = [], []
-        for i, (weight, bias) in enumerate(wsfeat):
+        for i in range(L):
+            weight, bias = wsfeat[i]
             b, _, *axes = weight.shape
             enc_i = layer_enc[i].unsqueeze(0)[..., None, None]
             for _ in axes[2:]:
