@@ -122,12 +122,13 @@ class LearnedPosEmbedding(nn.Module):
         out_weights, out_biases = [], []
         for i in range(len(self.network_spec)):
             weight, bias = wsfeat[i]
-            weight = weight + self.weight_emb.weight[i][None, :, None, None]
+            filter_dims = (None,) * (weight.ndim - 4)  # conv weight filter dims.
+            weight = weight + self.weight_emb.weight[i][(None, Ellipsis, None, None, *filter_dims)]
             bias = bias + self.bias_emb.weight[i][None, :, None]
             if i == 0:
-                weight = weight + self.inp_weight_arrange(self.inp_emb.weight)
+                weight = weight + self.inp_weight_arrange(self.inp_emb.weight)[(Ellipsis, *filter_dims)]
             if i == len(wsfeat.weights) - 1:
-                weight = weight + self.out_weight_arrange(self.out_emb.weight)
+                weight = weight + self.out_weight_arrange(self.out_emb.weight)[(Ellipsis, *filter_dims)]
                 bias = bias + self.out_bias_arrange(self.out_emb.weight)
             out_weights.append(weight)
             out_biases.append(bias)

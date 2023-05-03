@@ -415,7 +415,7 @@ class NPAttention(nn.Module):
                 out_weights_ip1 = torch.flatten(out[:, :, idx:].transpose(2, 3), start_dim=1, end_dim=2)
                 if not self.share_projections: out_weights_ip1 = self.unproject_weight[i+1](out_weights_ip1)
                 out_weights[i+1] += out_weights_ip1
-        return WeightSpaceFeatures(tuple(out_weights), tuple(out_biases))
+        return unshape_wsfeat_symmetry(WeightSpaceFeatures(tuple(out_weights), tuple(out_biases)), self.network_spec)
 
     def __repr__(self):
         return f"NPAttention(channels={self.ch * self.nh}, num_heads={self.nh}, dropout={self.dropout.p})"
