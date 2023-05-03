@@ -246,6 +246,14 @@ def test_NPAttention():
     assert test_sensitivity_uncoupled(layer, layer_sizes, channels)
     print("NPAttention is sensitive to uncoupled.")
 
+    filter_sizes = [(random.randint(3, 8), random.randint(3, 8)) for _ in range(len(layer_sizes) - 1)]
+    spec = network_spec_from_wsfeat(sample_cnn_params(1, channels, layer_sizes, filter_sizes))
+    layer = NPAttention(spec, channels, share_projections=False)
+    assert test_layer_equivariance(layer, layer_sizes, channels, filter_sizes)
+    print("NPAttention is equivariant for CNNs.")
+    assert test_sensitivity_uncoupled(layer, layer_sizes, channels, filter_sizes)
+    print("NPAttention is sensitive to uncoupled for CNNs.")
+
 
 if __name__ == "__main__":
     test_NPAttention()

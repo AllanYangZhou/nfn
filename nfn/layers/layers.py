@@ -332,11 +332,23 @@ class NPAttention(nn.Module):
     def __init__(
         self, network_spec: NetworkSpec, channels,
         num_heads=8, dropout=0,
+        share_projections=True,
     ):
         super().__init__()
         assert channels % num_heads == 0, f"channels ({channels}) must be divisible by num_heads ({num_heads})."
         self.network_spec = network_spec
-        self.to_qkv = ChannelLinear(channels, 3 * channels)
+        self.share_projections = share_projections
+        if share_projections:
+            self.to_qkv = ChannelLinear(channels, 3 * channels)
+        else:
+            self.weight_to_qkv = nn.ModuleList()  # maps channel dim k * k * c --> c
+            self.bias_to_qkv = nn.ModuleList()
+            self.unproject_weight = nn.ModuleList()  # maps channel dim c --> k * k * c
+            filter_facs = [int(np.prod(spec.shape[2:])) for spec in network_spec.weight_spec]
+            for filter_fac in filter_facs:
+                self.weight_to_qkv.append(ChannelLinear(filter_fac * channels, 3 * channels))
+                self.bias_to_qkv.append(ChannelLinear(channels, 3 * channels))
+                self.unproject_weight.append(ChannelLinear(channels, filter_fac * channels))
         self.nh = num_heads
         self.ch = channels // num_heads  # channels per head
         self.dropout = nn.Dropout(dropout)
@@ -346,9 +358,17 @@ class NPAttention(nn.Module):
         self.permute_Wip1 = Rearrange("... c n_ip1 n_i -> ... n_ip1 c n_i")
 
     def forward(self, wsfeat: WeightSpaceFeatures) -> WeightSpaceFeatures:
+        wsfeat = shape_wsfeat_symmetry(wsfeat, self.network_spec)
         out_weights = [torch.zeros_like(w) for w in wsfeat.weights]
         out_biases = [torch.zeros_like(b) for b in wsfeat.biases]
-        qkv = wsfeat.map(self.to_qkv)
+        if self.share_projections:
+            qkv = wsfeat.map(self.to_qkv)
+        else:
+            qkv_weights, qkv_biases = [], []
+            for i in range(len(self.network_spec)):
+                qkv_weights.append(self.weight_to_qkv[i](wsfeat.weights[i]))
+                qkv_biases.append(self.bias_to_qkv[i](wsfeat.biases[i]))
+            qkv = WeightSpaceFeatures(qkv_weights, qkv_biases)
         qkv = qkv.map(self.split_heads)
         rowcol_means = [w.mean(dim=(-2, -1)) for w in qkv.weights]  # (B, nh, c)
         bias_means = [b.mean(dim=-1) for b in qkv.biases]  # (B, nh, c)
@@ -357,7 +377,9 @@ class NPAttention(nn.Module):
         wb_out = self.combine_nh_nc(simple_attention(q_avg, k_avg, v_avg))
         w_out, b_out = wb_out.tensor_split(2, dim=-2)  # (B, n_layers, nh*ch)
         for i in range(len(out_weights)):
-            out_weights[i] += w_out[:, i].unsqueeze(-1).unsqueeze(-1)
+            w_out_i = w_out[:, i].unsqueeze(-1).unsqueeze(-1)
+            if not self.share_projections: w_out_i = self.unproject_weight[i](w_out_i)
+            out_weights[i] += w_out_i
             out_biases[i] += b_out[:, i].unsqueeze(-1)
         for i in range(-1, len(wsfeat)):
             inp = []
@@ -382,13 +404,17 @@ class NPAttention(nn.Module):
             idx = 0
             if i > -1:
                 # b nh n_im1 ch n_i -> b (nh ch) n_i n_im1
-                out_weights[i] += torch.flatten(out[:, :, :n_im1].permute(0, 1, 3, 4, 2), start_dim=1, end_dim=2)
+                out_weights_i = torch.flatten(out[:, :, :n_im1].permute(0, 1, 3, 4, 2), start_dim=1, end_dim=2)
+                if not self.share_projections: out_weights_i = self.unproject_weight[i](out_weights_i)
+                out_weights[i] += out_weights_i
                 # b nh 1 ch n_i -> b (nh ch) n_i
                 out_biases[i] += torch.flatten(out[:, :, n_im1: n_im1 + 1].squeeze(2), start_dim=1, end_dim=2)
                 idx = n_im1 + 1
             if i < len(wsfeat) - 1:
                 # b nh n_ip1 ch n_i -> b (nh ch) n_ip1 n_i
-                out_weights[i+1] += torch.flatten(out[:, :, idx:].transpose(2, 3), start_dim=1, end_dim=2)
+                out_weights_ip1 = torch.flatten(out[:, :, idx:].transpose(2, 3), start_dim=1, end_dim=2)
+                if not self.share_projections: out_weights_ip1 = self.unproject_weight[i+1](out_weights_ip1)
+                out_weights[i+1] += out_weights_ip1
         return WeightSpaceFeatures(tuple(out_weights), tuple(out_biases))
 
     def __repr__(self):
