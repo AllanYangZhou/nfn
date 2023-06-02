@@ -99,7 +99,7 @@ class Pointwise(nn.Module):
 
 class NPLinear(nn.Module):
     """Assume permutation symmetry of input and output layers, as well as hidden."""
-    def __init__(self, network_spec: NetworkSpec, in_channels, out_channels, io_embed=False):
+    def __init__(self, network_spec: NetworkSpec, in_channels, out_channels, io_embed=False, init_type="pytorch_default"):
         super().__init__()
         self.c_in, self.c_out = in_channels, out_channels
         self.network_spec = network_spec
@@ -132,8 +132,9 @@ class NPLinear(nn.Module):
                 getattr(self, f"layer_{i}_rc"),
                 getattr(self, f"layer_{i}_r"),
                 getattr(self, f"layer_{i}_c"),
+                init_type=init_type,
             )
-            set_init_(getattr(self, f"bias_{i}"), getattr(self, f"bias_{i}_rc"))
+            set_init_(getattr(self, f"bias_{i}"), getattr(self, f"bias_{i}_rc"), init_type=init_type)
         self.io_embed = io_embed
         if io_embed:
             # initialize learned position embeddings to break input and output symmetry
