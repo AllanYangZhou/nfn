@@ -334,6 +334,8 @@ class NPAttention(nn.Module):
         self, network_spec: NetworkSpec, channels,
         num_heads=8, dropout=0,
         share_projections=True,
+        ablate_crossterm=False,
+        ablate_diagonalterm=False,
     ):
         super().__init__()
         assert channels % num_heads == 0, f"channels ({channels}) must be divisible by num_heads ({num_heads})."
@@ -357,6 +359,8 @@ class NPAttention(nn.Module):
         self.combine_nh_nc = Rearrange("b nh t c -> b t (nh c)")
         self.permute_Wi_col = Rearrange("... c n_i n_im1 -> ... n_im1 c n_i")
         self.permute_Wip1 = Rearrange("... c n_ip1 n_i -> ... n_ip1 c n_i")
+        self.ablate_crossterm = ablate_crossterm
+        self.ablate_diagonalterm = ablate_diagonalterm
 
     def forward(self, wsfeat: WeightSpaceFeatures) -> WeightSpaceFeatures:
         wsfeat = shape_wsfeat_symmetry(wsfeat, self.network_spec)
@@ -375,13 +379,16 @@ class NPAttention(nn.Module):
         bias_means = [b.mean(dim=-1) for b in qkv.biases]  # (B, nh, c)
         qkv_avgs = torch.stack(rowcol_means + bias_means, dim=-2)  # (B, nh, 2 * n_layers, 3ch)
         q_avg, k_avg, v_avg = qkv_avgs.tensor_split(3, dim=-1)  # (B, nh, 2 * n_layers, ch)
-        wb_out = self.combine_nh_nc(simple_attention(q_avg, k_avg, v_avg))
-        w_out, b_out = wb_out.tensor_split(2, dim=-2)  # (B, n_layers, nh*ch)
-        for i in range(len(out_weights)):
-            w_out_i = w_out[:, i].unsqueeze(-1).unsqueeze(-1)
-            if not self.share_projections: w_out_i = self.unproject_weight[i](w_out_i)
-            out_weights[i] += w_out_i
-            out_biases[i] += b_out[:, i].unsqueeze(-1)
+        if not self.ablate_diagonalterm:
+            wb_out = self.combine_nh_nc(simple_attention(q_avg, k_avg, v_avg))
+            w_out, b_out = wb_out.tensor_split(2, dim=-2)  # (B, n_layers, nh*ch)
+            for i in range(len(out_weights)):
+                w_out_i = w_out[:, i].unsqueeze(-1).unsqueeze(-1)
+                if not self.share_projections: w_out_i = self.unproject_weight[i](w_out_i)
+                out_weights[i] += w_out_i
+                out_biases[i] += b_out[:, i].unsqueeze(-1)
+        if self.ablate_crossterm:
+            return unshape_wsfeat_symmetry(WeightSpaceFeatures(tuple(out_weights), tuple(out_biases)), self.network_spec)
         for i in range(-1, len(wsfeat)):
             inp = []
             if i > -1:
