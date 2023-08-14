@@ -28,7 +28,7 @@ Options for `nfnet`:
 
 ## Stylizing SIRENs
 
-We provide datasets of SIREN weights trained on the CIFAR and MNIST image datasets, available from [this link](https://drive.google.com/drive/folders/15CdOTPWHqDcS4SwbIdm100rXkTYZPcC5?usp=sharing). Download these datasets into `./experiments/data` and untar them:
+We provide datasets of SIREN weights trained on the MNIST, FashionMNIST, and CIFAR image datasets, available from [this link](https://drive.google.com/drive/folders/15CdOTPWHqDcS4SwbIdm100rXkTYZPcC5?usp=sharing). Download these datasets into `./experiments/data` and untar them:
 ```sh
 tar -xvf siren_mnist_wts.tar  # creates a folder siren_mnist_wts/
 tar -xvf siren_cifar_wts.tar  # creates a folder siren_cifar_wts/
