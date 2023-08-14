@@ -76,7 +76,7 @@ class WeightSpaceFeatures(collections.abc.Sequence):
 
     def to(self, device):
         """Moves all tensors to device."""
-        return WeightSpaceFeatures(tuple(w.to(device) for w in self.weights), tuple(b.to(device) for b in self.biases))
+        return WeightSpaceFeatures(tuple(w.to(device, non_blocking=True) for w in self.weights), tuple(b.to(device, non_blocking=True) for b in self.biases))
 
     @classmethod
     def from_zipped(cls, weight_and_biases):
@@ -142,3 +142,14 @@ def network_spec_from_wsfeat(wsfeat: WeightSpaceFeatures, set_all_dims=False) ->
             bias_shape = (bias.shape[-1],)
         bias_specs.append(ArraySpec(bias_shape))
     return NetworkSpec(weight_specs, bias_specs)
+
+
+def params_to_func_params(params: WeightSpaceFeatures):
+    """Convert our WeightSpaceFeatures object to a tuple of parameters for the functional model."""
+    out_params = []
+    for weight, bias in params:
+        if weight.shape[1] == 1:
+            weight, bias = weight.squeeze(1), bias.squeeze(1)
+        out_params.append(weight)
+        out_params.append(bias)
+    return tuple(out_params)

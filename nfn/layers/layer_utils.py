@@ -4,7 +4,7 @@ from nfn.common import WeightSpaceFeatures
 from einops import rearrange
 
 
-def set_init_(*layers):
+def set_init_(*layers, init_type="pytorch_default"):
     in_chan = 0
     for layer in layers:
         if isinstance(layer, (nn.Conv2d, nn.Conv1d)):
@@ -13,11 +13,19 @@ def set_init_(*layers):
             in_chan += layer.in_features
         else:
             raise NotImplementedError(f"Unknown layer type {type(layer)}")
-    bd = math.sqrt(1 / in_chan)
-    for layer in layers:
-        nn.init.uniform_(layer.weight, -bd, bd)
-        if layer.bias is not None:
-            nn.init.uniform_(layer.bias, -bd, bd)
+    if init_type == "pytorch_default":
+        bd = math.sqrt(1 / in_chan)
+        for layer in layers:
+            nn.init.uniform_(layer.weight, -bd, bd)
+            if layer.bias is not None:
+                nn.init.uniform_(layer.bias, -bd, bd)
+    elif init_type == "kaiming_normal":
+        std = math.sqrt(2 / in_chan)
+        for layer in layers:
+            nn.init.normal_(layer.weight, 0, std)
+            layer.bias.data.zero_()
+    else:
+        raise NotImplementedError(f"Unknown init type {init_type}.")
 
 
 def shape_wsfeat_symmetry(params, network_spec):

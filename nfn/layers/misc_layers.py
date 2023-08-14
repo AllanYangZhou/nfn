@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch import nn
 from nfn.layers.layer_utils import shape_wsfeat_symmetry
 from nfn.common import NetworkSpec, WeightSpaceFeatures
@@ -13,7 +14,8 @@ class FlattenWeights(nn.Module):
     def forward(self, wsfeat):
         wsfeat = shape_wsfeat_symmetry(wsfeat, self.network_spec)
         outs = []
-        for w, b in wsfeat:
+        for i in range(len(self.network_spec)):
+            w, b = wsfeat[i]
             outs.append(torch.flatten(w, start_dim=2).transpose(1, 2))
             outs.append(b.transpose(1, 2))
         return torch.cat(outs, dim=1)  # (B, N, C)
@@ -23,19 +25,23 @@ class UnflattenWeights(nn.Module):
     def __init__(self, network_spec: NetworkSpec):
         super().__init__()
         self.network_spec = network_spec
+        self.num_wts, self.num_bs = [], []
+        for weight_spec, bias_spec in zip(self.network_spec.weight_spec, self.network_spec.bias_spec):
+            self.num_wts.append(np.prod(weight_spec.shape))
+            self.num_bs.append(np.prod(bias_spec.shape))
 
     def forward(self, x: torch.Tensor) -> WeightSpaceFeatures:
-        # x.shape == (bs, num weights and biases)
+        # x.shape == (bs, num weights and biases, n_chan)
+        n_chan = x.shape[2]
         out_weights, out_biases = [], []
         curr_idx = 0
-        for weight_spec, bias_spec in zip(self.network_spec.weight_spec, self.network_spec.bias_spec):
-            num_wts = np.prod(weight_spec.shape)
+        for i, (weight_spec, bias_spec) in enumerate(zip(self.network_spec.weight_spec, self.network_spec.bias_spec)):
+            num_wts, num_bs = self.num_wts[i], self.num_bs[i]
             # reshape to (bs, 1, *weight_spec.shape) where 1 is channels.
-            wt = x[:, curr_idx:curr_idx + num_wts].view(-1, *weight_spec.shape).unsqueeze(1)
+            wt = x[:, curr_idx:curr_idx + num_wts].transpose(1, 2).reshape(-1, n_chan, *weight_spec.shape)
             out_weights.append(wt)
             curr_idx += num_wts
-            num_bs = np.prod(bias_spec.shape)
-            bs = x[:, curr_idx:curr_idx + num_bs].view(-1, *bias_spec.shape).unsqueeze(1)
+            bs = x[:, curr_idx:curr_idx + num_bs].transpose(1, 2).reshape(-1, n_chan, *bias_spec.shape)
             out_biases.append(bs)
             curr_idx += num_bs
         return WeightSpaceFeatures(out_weights, out_biases)
@@ -107,3 +113,29 @@ class TupleOp(nn.Module):
         out_weights = [self.op(w) for w in wsfeat.weights]
         out_bias = [self.op(b) for b in wsfeat.biases]
         return WeightSpaceFeatures(out_weights, out_bias)
+
+    def __repr__(self):
+        return f"TupleOp({self.op})"
+
+
+class CrossAttnEncoder(nn.Module):
+    def __init__(self, network_spec, channels, num_latents):
+        super().__init__()
+        self.embeddings = nn.Parameter(torch.randn(num_latents, channels))
+        self.flatten = FlattenWeights(network_spec)
+
+    def forward(self, params):
+        flat_params = self.flatten(params)
+        # (B, num_latents, C)
+        return F.scaled_dot_product_attention(self.embeddings, flat_params, flat_params)
+
+
+class CrossAttnDecoder(nn.Module):
+    def __init__(self, network_spec, channels, num_params):
+        super().__init__()
+        self.embeddings = nn.Parameter(torch.randn(num_params, channels))
+        self.unflatten = UnflattenWeights(network_spec)
+
+    def forward(self, latents):
+        # latents: (B, num_latents, C)
+        return self.unflatten(F.scaled_dot_product_attention(self.embeddings, latents, latents))

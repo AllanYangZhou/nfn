@@ -2,8 +2,8 @@ import random
 from einops import rearrange
 import torch
 from torch import nn
-from nfn.layers import StatFeaturizer
-from nfn.layers import NPLinear, HNPLinear, Pointwise
+from nfn.layers import StatFeaturizer, TupleOp
+from nfn.layers import NPLinear, HNPLinear, Pointwise, NPAttention
 from nfn.common import WeightSpaceFeatures, network_spec_from_wsfeat
 
 
@@ -190,6 +190,33 @@ def test_NPLinear():
     print("NPLinear is sensitive to uncoupled for CNNs.")
 
 
+def variance_wsfeat(wsfeat):
+    values = []
+    for weight, bias in wsfeat:
+        values.append(torch.flatten(weight, start_dim=1))
+        values.append(torch.flatten(bias, start_dim=1))
+    values = torch.cat(values, dim=1)
+    return torch.var(values)
+
+
+def test_init(init_type):
+    layer_sizes = [64, 128, 32]
+    chan = 64
+    bs = 100
+    spec = network_spec_from_wsfeat(sample_params(1, chan, layer_sizes))
+    model = nn.Sequential(
+        NPLinear(spec, chan, chan, init_type=init_type), TupleOp(nn.ReLU()),
+        NPLinear(spec, chan, chan, init_type=init_type), TupleOp(nn.ReLU()),
+        NPLinear(spec, chan, chan, init_type=init_type), TupleOp(nn.ReLU()),
+        NPLinear(spec, chan, chan, init_type=init_type), TupleOp(nn.ReLU()),
+        NPLinear(spec, chan, chan, init_type=init_type)
+    )
+    params = sample_params(bs, chan, layer_sizes)
+    out = model(params)
+    var_out = variance_wsfeat(out)
+    print(f"Variance of output with init_type={init_type}: {var_out:.3f}")
+
+
 def test_HNPLinear():
     layer_sizes = [10, 15, 13, 18, 14, 12]
     c_in, c_out = 3, 4
@@ -236,7 +263,29 @@ def test_StatFeaturizer():
     print("StatFeaturizer shape is correct.")
     
 
+def test_NPAttention():
+    layer_sizes = [10, 15, 13, 18, 14, 12]
+    channels = 64
+    spec = network_spec_from_wsfeat(sample_params(1, channels, layer_sizes))
+    layer = NPAttention(spec, 64, 8, dropout=0)
+    assert test_layer_equivariance(layer, layer_sizes, channels)
+    print("NPAttention is equivariant.")
+    assert test_sensitivity_uncoupled(layer, layer_sizes, channels)
+    print("NPAttention is sensitive to uncoupled.")
+
+    filter_sizes = [(random.randint(3, 8), random.randint(3, 8)) for _ in range(len(layer_sizes) - 1)]
+    spec = network_spec_from_wsfeat(sample_cnn_params(1, channels, layer_sizes, filter_sizes))
+    layer = NPAttention(spec, channels, share_projections=False)
+    assert test_layer_equivariance(layer, layer_sizes, channels, filter_sizes)
+    print("NPAttention is equivariant for CNNs.")
+    assert test_sensitivity_uncoupled(layer, layer_sizes, channels, filter_sizes)
+    print("NPAttention is sensitive to uncoupled for CNNs.")
+
+
 if __name__ == "__main__":
+    test_init("pytorch_default")
+    test_init("kaiming_normal")
+    test_NPAttention()
     test_Pointwise()
     test_HNPLinear_2layer()
     test_NPLinear()

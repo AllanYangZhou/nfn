@@ -1,6 +1,7 @@
 import math
 import torch
 from torch import nn
+from einops.layers.torch import Rearrange
 from nfn.common import WeightSpaceFeatures, NetworkSpec
 
 
@@ -12,14 +13,14 @@ class GaussianFourierFeatureTransform(nn.Module):
 
     def __init__(self, network_spec, in_channels, mapping_size=256, scale=10):
         super().__init__()
-        del network_spec
-        self._num_input_channels = in_channels
+        self.network_spec = network_spec
+        self.in_channels = in_channels
         self._mapping_size = mapping_size
         self.out_channels = mapping_size * 2
+        self.scale = scale
         self.register_buffer("_B", torch.randn((in_channels, mapping_size)) * scale)
 
     def encode_tensor(self, x):
-        assert len(x.shape) >= 3
         # Put channels dimension last.
         x = (x.transpose(1, -1) @ self._B).transpose(1, -1)
         x = 2 * math.pi * x
@@ -27,10 +28,14 @@ class GaussianFourierFeatureTransform(nn.Module):
 
     def forward(self, wsfeat):
         out_weights, out_biases = [], []
-        for (weight, bias) in wsfeat:
+        for i in range(len(self.network_spec)):
+            weight, bias = wsfeat[i]
             out_weights.append(self.encode_tensor(weight))
             out_biases.append(self.encode_tensor(bias))
         return WeightSpaceFeatures(out_weights, out_biases)
+
+    def __repr__(self):
+        return f"GaussianFourierFeatureTransform(in_channels={self.in_channels}, mapping_size={self._mapping_size}, scale={self.scale})"
 
 
 def fourier_encode(x, max_freq, num_bands = 4):
@@ -71,7 +76,8 @@ class IOSinusoidalEncoding(nn.Module):
         d = 2 * self.num_bands + 1
 
         out_weights, out_biases = [], []
-        for i, (weight, bias) in enumerate(wsfeat):
+        for i in range(L):
+            weight, bias = wsfeat[i]
             b, _, *axes = weight.shape
             enc_i = layer_enc[i].unsqueeze(0)[..., None, None]
             for _ in axes[2:]:
@@ -96,3 +102,37 @@ class IOSinusoidalEncoding(nn.Module):
 
     def num_out_chan(self, in_chan):
         return in_chan + (2 * self.num_bands + 1)
+
+
+class LearnedPosEmbedding(nn.Module):
+    def __init__(self, network_spec: NetworkSpec, channels):
+        super().__init__()
+        self.channels = channels
+        self.network_spec = network_spec
+        self.weight_emb = nn.Embedding(len(network_spec), channels)
+        self.bias_emb = nn.Embedding(len(network_spec), channels)
+        num_inp, num_out = network_spec.get_io()
+        self.inp_emb = nn.Embedding(num_inp, channels)
+        self.out_emb = nn.Embedding(num_out, channels)
+        self.inp_weight_arrange = Rearrange("n_in c -> 1 c 1 n_in")
+        self.out_weight_arrange = Rearrange("n_out c -> 1 c n_out 1")
+        self.out_bias_arrange = Rearrange("n_out c -> 1 c n_out")
+
+    def forward(self, wsfeat: WeightSpaceFeatures) -> WeightSpaceFeatures:
+        out_weights, out_biases = [], []
+        for i in range(len(self.network_spec)):
+            weight, bias = wsfeat[i]
+            filter_dims = (None,) * (weight.ndim - 4)  # conv weight filter dims.
+            weight = weight + self.weight_emb.weight[i][(None, Ellipsis, None, None, *filter_dims)]
+            bias = bias + self.bias_emb.weight[i][None, :, None]
+            if i == 0:
+                weight = weight + self.inp_weight_arrange(self.inp_emb.weight)[(Ellipsis, *filter_dims)]
+            if i == len(wsfeat.weights) - 1:
+                weight = weight + self.out_weight_arrange(self.out_emb.weight)[(Ellipsis, *filter_dims)]
+                bias = bias + self.out_bias_arrange(self.out_emb.weight)
+            out_weights.append(weight)
+            out_biases.append(bias)
+        return WeightSpaceFeatures(tuple(out_weights), tuple(out_biases))
+
+    def __repr__(self):
+        return f"LearnedPosEmbedding(channels={self.channels})"
