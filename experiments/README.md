@@ -25,3 +25,28 @@ Options for `nfnet`:
 - `hnp_inv`: Invariant NFN using HNP NF-Layers
 - `np_inv`: Invariant NFN using NP NF-Layers, with learned IO-encoding.
 - `stat`: StatNet, a method from Unterthiner et al, 2020.
+
+## Stylizing SIRENs
+
+We provide datasets of SIREN weights trained on the MNIST, FashionMNIST, and CIFAR image datasets, available from [this link](https://drive.google.com/drive/folders/15CdOTPWHqDcS4SwbIdm100rXkTYZPcC5?usp=sharing). Download these datasets into `./experiments/data` and untar them:
+```sh
+tar -xvf siren_mnist_wts.tar  # creates a folder siren_mnist_wts/
+tar -xvf siren_fashion_wts.tar  # creates a folder siren_fashion_wts/
+tar -xvf siren_cifar_wts.tar  # creates a folder siren_cifar_wts/
+```
+
+We have two experiment settings:
+
+1. `+setup=mnist`: train an NFN to dilate MNIST digits
+1. `+setup=cifar`: train an NFN to increase contrast of CIFAR10 images
+
+And a few architecture options:
+
+* `nfnet=equiv`: HNP-equivariant architecture
+* `nfnet=equiv_io`: NP-equivariant architecture
+* `nfnet=mlp`: MLP baseline
+
+For example:
+```bash
+python -m experiments.launch_stylize_siren +setup=mnist nfnet=equiv
+```

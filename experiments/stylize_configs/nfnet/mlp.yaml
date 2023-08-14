@@ -1,0 +1,3 @@
+_target_: experiments.stylize_models.MLPTransferNet
+h_size: 1000
+out_scale: 0.01

@@ -1,0 +1,5 @@
+_target_: nfn.layers.IOSinusoidalEncoding
+_partial_: true
+max_freq: 3
+num_bands: 3
+enc_layers: false

@@ -1,0 +1,16 @@
+defaults:
+  - nfnet: equiv
+  - opt: adam
+  - sched: linear
+  - _self_
+
+batch_size: 32
+max_steps: 50000
+style: null  # set by a setup file
+siren_path: null  # set by a setup file
+output_dir: ${hydra:runtime.output_dir}
+
+# don't change directory
+hydra:
+  job:
+    chdir: False

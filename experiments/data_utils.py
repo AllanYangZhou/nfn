@@ -1,11 +1,17 @@
+import glob
+import re
 import random
 import os
 
 import numpy as np
 import pandas as pd
-from torch.utils.data import Dataset, Dataset
+from torch.utils.data import Dataset, Dataset, ConcatDataset, Subset
 import torch
+from torchvision import transforms
+from torchvision.datasets import MNIST, CIFAR10
 import pandas as pd
+
+from nfn.common import state_dict_to_tensors
 
 
 def cycle(loader):
@@ -109,3 +115,53 @@ class ZooDataset(Dataset):
         weights = tuple(w[idx][None] for w in self.weights)
         biases = tuple(b[idx][None] for b in self.biases)
         return (weights, biases), self.metrics.iloc[idx].test_accuracy.item()
+
+
+class SirenDataset(Dataset):
+    def __init__(self, data_path, prefix="randinit_test"):
+        idx_pattern = r"net(\d+)\.pth"
+        label_pattern = r"_(\d)s"
+        self.idx_to_path = {}
+        self.idx_to_label = {}
+        for siren_path in glob.glob(os.path.join(data_path, f"{prefix}_*/*.pth")):
+            idx = int(re.search(idx_pattern, siren_path).group(1))
+            self.idx_to_path[idx] = siren_path
+            label = int(re.search(label_pattern, siren_path).group(1))
+            self.idx_to_label[idx] = label
+        assert sorted(list(self.idx_to_path.keys())) == list(range(len(self.idx_to_path)))
+
+    def __getitem__(self, idx):
+        sd = torch.load(self.idx_to_path[idx])
+        weights, biases = state_dict_to_tensors(sd)
+        return (weights, biases), self.idx_to_label[idx]
+
+    def __len__(self):
+        return len(self.idx_to_path)
+
+
+DEF_TFM = transforms.Compose([transforms.ToTensor(), transforms.Normalize(torch.Tensor([0.5]), torch.Tensor([0.5]))])
+class SirenAndOriginalDataset(Dataset):
+    def __init__(self, siren_path, siren_prefix, data_path, data_tfm=DEF_TFM):
+        self.siren_dset = SirenDataset(siren_path, prefix=siren_prefix)
+        if "mnist" in siren_path:
+            self.data_type = "mnist"
+            print("Loading MNIST")
+            MNIST_train = MNIST(data_path, transform=data_tfm, train=True, download=True)
+            MNIST_test = MNIST(data_path, transform=data_tfm, train=False, download=True)
+            self.dset = Subset(ConcatDataset([MNIST_train, MNIST_test]), range(len(self.siren_dset)))
+        else:
+            self.data_type = "cifar"
+            print("Loading CIFAR10")
+            CIFAR_train = CIFAR10(data_path, transform=data_tfm, train=True, download=True)
+            CIFAR_test = CIFAR10(data_path, transform=data_tfm, train=False, download=True)
+            self.dset = ConcatDataset([CIFAR_train, CIFAR_test])
+        assert len(self.siren_dset) == len(self.dset), f"{len(self.siren_dset)} != {len(self.dset)}"
+
+    def __len__(self):
+        return len(self.dset)
+
+    def __getitem__(self, idx):
+        params, siren_label = self.siren_dset[idx]
+        img, data_label = self.dset[idx]
+        assert siren_label == data_label
+        return params, img, data_label
