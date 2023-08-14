@@ -45,6 +45,12 @@ def evaluate(nfnet, loader, batch_siren):
     return recon_loss / tot_examples
 
 
+def sharpen(img):
+    kernel = np.array([[-.25,-.25,-.25], [-.25,3,-.25], [-.25,-.25,-.25]])
+    img = cv2.filter2D(img, -1, kernel)
+    return img
+
+
 def inrease_contrast(img):
     # https://stackoverflow.com/questions/39308030/how-do-i-increase-the-contrast-of-an-image-in-python-opencv
     lab= cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
@@ -55,7 +61,7 @@ def inrease_contrast(img):
     cl = clahe.apply(l_channel)
     # merge the CLAHE enhanced L-channel with the a and b channel
     limg = cv2.merge((cl,a,b))
-    # Converting image from LAB Color model to BGR color spcae
+    # Converting image from LAB Color model to BGR color space
     enhanced_img = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
     return enhanced_img
 
@@ -80,7 +86,10 @@ def main(cfg):
     kernel = np.ones((3, 3), np.uint8)
     style_to_function = {
         'dilate': lambda im: cv2.dilate(im, kernel, iterations=1),
-        'contrast': inrease_contrast
+        'sharpen': sharpen,
+        'contrast': inrease_contrast,
+        'erode': lambda im: cv2.erode(im, np.ones((2, 2), np.uint8), iterations=1),
+        'gradient': lambda im: cv2.morphologyEx(im, cv2.MORPH_GRADIENT, np.ones((2, 2), np.uint8)),
     }
     wandb.init(project=f"stylize_siren", reinit=True, config=OmegaConf.to_container(cfg, resolve=True))
 
