@@ -1,11 +1,14 @@
-# Experiments (WIP)
-This folder will contain experiments corresponding to [the paper](https://arxiv.org/abs/2302.14040). Throughout this document we assume that your current working directory is the root directory of the repository.
+# Experiments 
+This folder contains experiments from [Permutation Equivariant Neural Functionals
+](https://arxiv.org/abs/2302.14040) and [Neural Functional Transformers
+](https://arxiv.org/abs/2305.13546). Throughout this document we assume that your current working directory is the **root** directory of the repository.
 
 The experiments require additional dependencies. In your virtual env:
 ```bash
 pip install -r requirements.txt
+pip install -e experiments/perceiver-pytorch
 ```
-We use Python 3.7.12.
+We use Python 3.8.16.
 
 ## Predicting generalization for small CNNs
 ### Getting CNN Zoo data
@@ -50,3 +53,7 @@ For example:
 ```bash
 python -m experiments.launch_stylize_siren +setup=mnist nfnet=equiv
 ```
+
+## Classifying SIRENs
+These experiments use the same MNIST, FashionMNIST, and CIFAR-10 INR datasets as in the previous section.
+### With INR2Array (NFT)

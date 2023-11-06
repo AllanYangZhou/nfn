@@ -1,0 +1,5 @@
+_partial_: true
+_target_: experiments.embed_siren.NPPooling
+reduce: true
+num_patches: 16  # divide spatial latent into 16 patches=4x4
+latent_dim: 256  # each patch has this dimension.

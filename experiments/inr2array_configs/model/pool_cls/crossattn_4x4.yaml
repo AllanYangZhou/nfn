@@ -1,0 +1,8 @@
+_partial_: true
+_target_: experiments.inr2array.PerceiverPooling
+n_latent: 16
+latent_dim: 256
+reduce: true
+attn_dropout: 0
+ff_dropout: 0
+self_per_cross_attn: 0
