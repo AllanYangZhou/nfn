@@ -1,3 +1,4 @@
+import typing
 import glob
 import re
 import random
@@ -5,10 +6,10 @@ import os
 
 import numpy as np
 import pandas as pd
-from torch.utils.data import Dataset, Dataset, ConcatDataset, Subset
+from torch.utils.data import Dataset, Dataset, ConcatDataset, Subset, Sampler
 import torch
 from torchvision import transforms
-from torchvision.datasets import MNIST, CIFAR10
+from torchvision.datasets import MNIST, CIFAR10, FashionMNIST
 import pandas as pd
 
 from nfn.common import state_dict_to_tensors
@@ -118,44 +119,87 @@ class ZooDataset(Dataset):
 
 
 class SirenDataset(Dataset):
-    def __init__(self, data_path, prefix="randinit_test"):
+    def __init__(
+        self,
+        data_path,
+        prefix="randinit_test",
+        split="all",
+        # split point for val and test sets
+        split_points: typing.Tuple[int, int] = None,
+    ):
         idx_pattern = r"net(\d+)\.pth"
         label_pattern = r"_(\d)s"
         self.idx_to_path = {}
         self.idx_to_label = {}
+        # TODO: this glob pattern should actually be f"{prefix}_[0-9]s/*.pth".
+        # For 1 original + 10 augs, this amounts to having 10 copies instead of 11,
+        # so it probably doesn't make a big difference in final performance.
         for siren_path in glob.glob(os.path.join(data_path, f"{prefix}_*/*.pth")):
             idx = int(re.search(idx_pattern, siren_path).group(1))
             self.idx_to_path[idx] = siren_path
             label = int(re.search(label_pattern, siren_path).group(1))
             self.idx_to_label[idx] = label
-        assert sorted(list(self.idx_to_path.keys())) == list(range(len(self.idx_to_path)))
+        if split == "all":
+            self.idcs = list(range(len(self.idx_to_path)))
+        else:
+            val_point, test_point = split_points
+            self.idcs = {
+                "train": list(range(val_point)),
+                "val": list(range(val_point, test_point)),
+                "test": list(range(test_point, len(self.idx_to_path))),
+            }[split]
 
     def __getitem__(self, idx):
-        sd = torch.load(self.idx_to_path[idx])
+        data_idx = self.idcs[idx]
+        sd = torch.load(self.idx_to_path[data_idx])
         weights, biases = state_dict_to_tensors(sd)
-        return (weights, biases), self.idx_to_label[idx]
+        return (weights, biases), self.idx_to_label[data_idx]
 
     def __len__(self):
-        return len(self.idx_to_path)
+        return len(self.idcs)
 
 
 DEF_TFM = transforms.Compose([transforms.ToTensor(), transforms.Normalize(torch.Tensor([0.5]), torch.Tensor([0.5]))])
 class SirenAndOriginalDataset(Dataset):
-    def __init__(self, siren_path, siren_prefix, data_path, data_tfm=DEF_TFM):
-        self.siren_dset = SirenDataset(siren_path, prefix=siren_prefix)
+    def __init__(
+        self,
+        siren_path,
+        siren_prefix,
+        data_path,
+        split="all",
+        data_tfm=DEF_TFM,
+        split_points=None,
+    ):
+        siren_dset = SirenDataset(siren_path, split="all", prefix=siren_prefix)
         if "mnist" in siren_path:
             self.data_type = "mnist"
             print("Loading MNIST")
             MNIST_train = MNIST(data_path, transform=data_tfm, train=True, download=True)
             MNIST_test = MNIST(data_path, transform=data_tfm, train=False, download=True)
-            self.dset = Subset(ConcatDataset([MNIST_train, MNIST_test]), range(len(self.siren_dset)))
+            dset = ConcatDataset([MNIST_train, MNIST_test])
+        elif "fashion" in siren_path:
+            self.data_type = "fashion"
+            print("Loading FashionMNIST")
+            fMNIST_train = FashionMNIST(data_path, transform=data_tfm, train=True, download=True)
+            fMNIST_test = FashionMNIST(data_path, transform=data_tfm, train=False, download=True)
+            dset = ConcatDataset([fMNIST_train, fMNIST_test])
         else:
             self.data_type = "cifar"
             print("Loading CIFAR10")
             CIFAR_train = CIFAR10(data_path, transform=data_tfm, train=True, download=True)
             CIFAR_test = CIFAR10(data_path, transform=data_tfm, train=False, download=True)
-            self.dset = ConcatDataset([CIFAR_train, CIFAR_test])
-        assert len(self.siren_dset) == len(self.dset), f"{len(self.siren_dset)} != {len(self.dset)}"
+            dset = ConcatDataset([CIFAR_train, CIFAR_test])
+        if split == "all":
+            idcs = list(range(len(siren_dset)))
+        else:
+            val_point, test_point = split_points
+            idcs = {
+                "train": list(range(val_point)),
+                "val": list(range(val_point, test_point)),
+                "test": list(range(test_point, len(siren_dset))),
+            }[split]
+        self.siren_dset = Subset(siren_dset, idcs)
+        self.dset = Subset(dset, idcs)
 
     def __len__(self):
         return len(self.dset)
@@ -165,3 +209,23 @@ class SirenAndOriginalDataset(Dataset):
         img, data_label = self.dset[idx]
         assert siren_label == data_label
         return params, img, data_label
+
+
+class AlignedSampler(Sampler):
+    def __init__(self, data_source, samples_per_dset):
+        """Assumes data_source is a concatenation of N datasets, each of size samples_per_dset."""
+        self.data_source = data_source
+        assert len(self.data_source) % samples_per_dset == 0, "Dataset size must be divisible by samples_per_dset."
+        self.num_dsets = len(self.data_source) // samples_per_dset
+        self.samples_per_dset = samples_per_dset
+
+    def __iter__(self):
+        example_indices = torch.randperm(self.samples_per_dset).tolist()
+        # get the example_indices[i]th example from each dataset, for i in range(samples_per_dset)
+        full_indices = []
+        for idx in example_indices:
+            full_indices.extend([idx + i * self.samples_per_dset for i in range(self.num_dsets)])
+        yield from full_indices
+
+    def __len__(self):
+        return len(self.data_source)

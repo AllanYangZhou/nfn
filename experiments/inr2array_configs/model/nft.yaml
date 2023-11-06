@@ -1,0 +1,19 @@
+defaults:
+  - pool_cls: crossattn_4x4
+
+_target_: experiments.inr2array.AutoEncoder
+block_type: nft
+num_blocks: 6
+spatial: true
+compile: false
+enc_scale: 3
+enc_map_size: 128
+dec_type: sitzmann
+additive: false
+
+dec_hidden_size: 256
+dec_hidden_layers: 1
+
+num_heads: 4
+ff_factor: 4
+dropout: 0

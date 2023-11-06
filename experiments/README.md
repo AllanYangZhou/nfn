@@ -1,11 +1,14 @@
-# Experiments (WIP)
-This folder will contain experiments corresponding to [the paper](https://arxiv.org/abs/2302.14040). Throughout this document we assume that your current working directory is the root directory of the repository.
+# Experiments 
+This folder contains experiments from [Permutation Equivariant Neural Functionals
+](https://arxiv.org/abs/2302.14040) and [Neural Functional Transformers
+](https://arxiv.org/abs/2305.13546). Throughout this document we assume that your current working directory is the **root** directory of the repository.
 
 The experiments require additional dependencies. In your virtual env:
 ```bash
 pip install -r requirements.txt
+pip install -e experiments/perceiver-pytorch
 ```
-We use Python 3.7.12.
+We use Python 3.8.16.
 
 ## Predicting generalization for small CNNs
 ### Getting CNN Zoo data
@@ -49,4 +52,31 @@ And a few architecture options:
 For example:
 ```bash
 python -m experiments.launch_stylize_siren +setup=mnist nfnet=equiv
+```
+
+## Classifying SIRENs
+These experiments use the same MNIST, FashionMNIST, and CIFAR-10 INR datasets as in the previous section.
+
+### With INR2Array (NFT)
+This produces low-dimensional embeddings of the SIRENs using Neural Functional Transformers (NFTs). Some reasonable hyperparam configs:
+```bash
+# MNIST
+python -m experiments.launch_inr2array dset=mnist model=nft compile=true
+# FashionMNIST
+python -m experiments.launch_inr2array dset=fashion model=nft compile=true
+# CIFAR
+python -m experiments.launch_inr2array dset=cifar model=nft_additive compile=true
+```
+You may also add `model/pool_cls=crossattn_2x2` or `cross_attn_8x8` to vary the size of the spatial latent. `compile` uses Pytorch 2.0's new compile feature which can improve computational performance.
+
+Once the INR2Array model is trained, you want to produce a dataset of embeddings from the SIREN dataset. In this example, `rundir` should be the hydra rundir for the INR2Array model you just trained, which could be something like `./outputs/2023-11-05/23-51-53`.
+
+```bash
+python -m experiments.make_latent_dset --rundir [...] --output_path experiments/data/mnist-embeddings.pt
+```
+
+Finally, you can train a classifier on the embeddings:
+
+```bash
+python -m experiments.launch_classify_latent embedding_path=experiments/data/mnist-embeddings.pt
 ```

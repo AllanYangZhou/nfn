@@ -1,0 +1,8 @@
+_partial_: true
+_target_: experiments.embed_siren.PerceiverPooling
+n_latent: 64
+latent_dim: 256
+reduce: true
+attn_dropout: 0.1
+ff_dropout: 0.1
+self_per_cross_attn: 2

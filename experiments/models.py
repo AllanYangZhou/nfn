@@ -1,11 +1,14 @@
 from typing import Optional, Union, Type
 import torch
 from torch import nn
+from einops.layers.torch import Rearrange
 
-from nfn.layers import Pointwise, NPLinear, HNPLinear, NPPool
-from nfn.layers import TupleOp, HNPPool, ParamLayerNorm, SimpleLayerNorm, ChannelDropout
-from nfn.layers import StatFeaturizer, GaussianFourierFeatureTransform, IOSinusoidalEncoding
+from nfn.layers import Pointwise, NPLinear, HNPLinear, FlattenWeights, NPPool
+from nfn.layers import TupleOp, ResBlock, HNPPool, ParamLayerNorm, SimpleLayerNorm, ChannelDropout
+from nfn.layers import StatFeaturizer, GaussianFourierFeatureTransform, IOSinusoidalEncoding, FlattenWeights
+from nfn.layers import NPAttention
 from nfn.common import NetworkSpec, WeightSpaceFeatures
+from perceiver_pytorch import Perceiver
 
 
 MODE2LAYER = {
@@ -73,6 +76,7 @@ class MlpHead(nn.Module):
         sigmoid=False
     ):
         super().__init__()
+        self.sigmoid = sigmoid
         head_layers = []
         pool_cls = POOL_DICT[pool_mode]
         head_layers.extend([pool_cls(network_spec), nn.Flatten(start_dim=-2)])
@@ -142,6 +146,53 @@ class InvariantNFN(NormalizingModule):
         return self.head(features)
 
 
+class InvariantResNFN(nn.Module):
+    """Invariant residual hypernetwork. Outputs a scalar."""
+    def __init__(
+        self,
+        network_spec: NetworkSpec,
+        hchannels,
+        head_cls,
+        mode="full",
+        feature_dropout=0,
+        inp_enc_cls=None,
+        pos_enc_cls=None,
+    ):
+        super().__init__()
+        self.normalize = False
+        layers = []
+        prev_channels = 1
+        if inp_enc_cls is not None:
+            inp_enc: GaussianFourierFeatureTransform = inp_enc_cls(network_spec, prev_channels)
+            layers.append(inp_enc)
+            prev_channels = 2 * inp_enc._mapping_size
+        if pos_enc_cls:
+            pos_enc: IOSinusoidalEncoding = pos_enc_cls(network_spec)
+            layers.append(pos_enc)
+            prev_channels = pos_enc.num_out_chan(prev_channels)
+        for i, num_channels in enumerate(hchannels):
+            hlayer = MODE2LAYER[mode](network_spec, in_channels=prev_channels, out_channels=num_channels)
+            if i == 0:
+                layers.extend([hlayer, TupleOp(nn.ReLU())])
+                if feature_dropout > 0:
+                    layers.append(TupleOp(nn.Dropout(p=feature_dropout)))
+            elif i == len(hchannels) - 1:
+                layers.extend([hlayer, TupleOp(nn.ReLU())])
+                if feature_dropout > 0:
+                    layers.append(TupleOp(nn.Dropout(p=feature_dropout)))
+            else:
+                assert num_channels == prev_channels
+                norm = SimpleLayerNorm(network_spec, prev_channels)
+                hlayer = ResBlock(hlayer, TupleOp(nn.ReLU()), feature_dropout, norm)
+                layers.append(hlayer)
+            prev_channels = num_channels
+        self.features = nn.Sequential(*layers)
+        self.head = head_cls(network_spec, prev_channels, append_stats=False)
+
+    def forward(self, params):
+        return self.head(self.features(params))
+
+
 class StatNet(NormalizingModule):
     """Outputs a scalar."""
     def __init__(
@@ -169,3 +220,182 @@ class StatNet(NormalizingModule):
 
     def forward(self, params):
         return self.hypernetwork(self.preprocess(params))
+
+
+class Perceiver2d(nn.Module):
+    def __init__(
+        self,
+        network_spec,
+        in_channels,
+        append_stats,
+        num_classes,
+        depth=1,
+        self_per_cross_attn=2,
+        num_latents=32,
+        latent_dim=128,
+        latent_heads=4,
+        dropout=0.1,
+        pool_latents=True,
+    ):
+        super().__init__()
+        del append_stats
+        self.flatten = FlattenWeights(network_spec)
+        self.model = Perceiver(
+            input_channels=in_channels,
+            input_axis=1,
+            num_freq_bands=6,
+            max_freq=10.,
+            depth=depth,
+            num_latents=num_latents,
+            latent_dim=latent_dim,
+            cross_heads=1,
+            latent_heads=latent_heads,
+            cross_dim_head=64,
+            latent_dim_head=64,
+            attn_dropout=dropout,
+            ff_dropout=dropout,
+            weight_tie_layers=False,
+            fourier_encode_data=False,
+            self_per_cross_attn=self_per_cross_attn,
+            final_classifier_head=pool_latents,
+            num_classes=num_classes,
+        )
+        self.num_latents = num_latents
+        self.latent_dim = latent_dim
+        self.num_classes = num_classes
+        self.unflatten = nn.Unflatten(1, (int(num_latents**0.5), int(num_latents**0.5)))
+        self.conv = nn.Sequential(
+            nn.Conv2d(latent_dim, 64, 2), nn.ReLU(), nn.Dropout(p=dropout), # (b, 64, sqrt(n)-1, sqrt(n)-1)
+            nn.Conv2d(64, 64, 2), nn.ReLU(), nn.Dropout(p=dropout), # (b, 64, sqrt(n)-2, sqrt(n)-2)
+            nn.Flatten(),
+            nn.Linear(64 * (int(num_latents**0.5-2))**2, num_classes) # (b, num_classes)
+        ) if not pool_latents else nn.Identity()
+
+    def forward(self, params):
+        perceiver_out = self.model(self.flatten(params)) # (b, n, c)
+        conv_input = self.unflatten(perceiver_out).permute(0, 3, 1, 2) # (b, c, sqrt(n), sqrt(n))
+        return self.conv(conv_input)
+
+
+class PerceiverNet(nn.Module):
+    def __init__(
+        self,
+        network_spec,
+        in_channels,
+        append_stats,
+        num_classes,
+        depth=1,
+        self_per_cross_attn=2,
+        num_latents=32,
+        latent_dim=128,
+        latent_heads=4,
+        latent_dim_head=64,
+        cross_heads=1,
+        cross_dim_head=64,
+        dropout=0.1,
+        pool_latents=True,
+    ):
+        super().__init__()
+        del append_stats
+        self.flatten = FlattenWeights(network_spec)
+        self.model = Perceiver(
+            input_channels=in_channels,
+            input_axis=1,
+            num_freq_bands=6,
+            max_freq=10.,
+            depth=depth,
+            num_latents=num_latents,
+            latent_dim=latent_dim,
+            cross_heads=cross_heads,
+            latent_heads=latent_heads,
+            cross_dim_head=cross_dim_head,
+            latent_dim_head=latent_dim_head,
+            attn_dropout=dropout,
+            ff_dropout=dropout,
+            weight_tie_layers=False,
+            fourier_encode_data=False,
+            self_per_cross_attn=self_per_cross_attn,
+            final_classifier_head=pool_latents,
+            num_classes=num_classes,
+        )
+        self.mlp = nn.Sequential(
+            Rearrange("b n c -> b (n c)"),
+            nn.Linear(latent_dim * num_latents, 1000), nn.ReLU(), nn.Dropout(p=dropout),
+            nn.Linear(1000, 1000), nn.ReLU(), nn.Dropout(p=dropout),
+            nn.Linear(1000, num_classes),
+        ) if not pool_latents else nn.Identity()
+
+    def forward(self, params):
+        perceiver_out = self.model(self.flatten(params))
+        return self.mlp(perceiver_out)
+    
+
+class MlpNFN(NormalizingModule):
+    """Hypernetwork trained with weight permutation augmentations. Outputs a scalar."""
+    def __init__(
+        self,
+        network_spec: NetworkSpec,
+        h_size,
+        num_layers=3,
+        dropout=0.0,
+        sigmoid=False,
+        normalize=False,
+    ):
+        super().__init__(normalize=normalize)
+        activations = [nn.Sigmoid()] if sigmoid else []
+        hidden_layers = []
+        for _ in range(num_layers - 2):
+            hidden_layers.append(nn.Linear(h_size, h_size))
+            hidden_layers.append(nn.ReLU())
+            hidden_layers.append(nn.Dropout(p=dropout))
+        self.hypernetwork = nn.Sequential(
+            FlattenWeights(network_spec),
+            nn.Flatten(start_dim=-2),
+            nn.Linear(network_spec.get_num_params(), h_size),
+            nn.ReLU(),
+            nn.Dropout(p=dropout),
+            *hidden_layers,
+            nn.Linear(h_size, 10),
+            *activations,
+        )
+
+    def forward(self, params):
+        return self.hypernetwork(self.preprocess(params))
+
+
+class Block(nn.Module):
+    def __init__(
+        self,
+        network_spec,
+        channels,
+        ff_factor=2,
+        num_heads=8,
+        dropout=0.1,
+        share_projections=True,
+        # These two are for ablations only, should always be False otherwise.
+        ablate_crossterm=False,
+        ablate_diagonalterm=False,
+    ):
+        super().__init__()
+        self.ln1 = SimpleLayerNorm(network_spec, channels)
+        self.ln2 = SimpleLayerNorm(network_spec, channels)
+        self.attn = NPAttention(
+            network_spec,
+            channels,
+            num_heads,
+            dropout,
+            share_projections=share_projections,
+            ablate_crossterm=ablate_crossterm,
+            ablate_diagonalterm=ablate_diagonalterm,
+        )
+        self.drop = TupleOp(nn.Dropout(dropout))
+        self.ff = nn.Sequential(
+            Pointwise(network_spec, channels, ff_factor * channels),
+            TupleOp(nn.GELU()),
+            Pointwise(network_spec, ff_factor * channels, channels),
+            TupleOp(nn.Dropout(dropout)),
+        )
+
+    def forward(self, x):
+        x = x + self.drop(self.attn(self.ln1(x)))
+        return x + self.ff(self.ln2(x))

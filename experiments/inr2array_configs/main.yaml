@@ -1,0 +1,33 @@
+defaults:
+  - model: nft
+  - dset: mnist
+  - _self_
+
+seed: null
+bs: 64
+total_steps: 200_000
+warmup_steps: 10_000
+decay_start: null  # when to start decaying learning rate. if none, start at warmup_steps
+true_target: false  # if true, then the autoencoding target is the true image, not the siren reconstruction
+amp_enabled: false  # train using mixed precision (faster, less precise)
+amp_dtype: float16  # only used if amp_enabled is true. other options: bfloat16
+watch_grads: true  # wandb log gradients every 1k steps
+run_id: null  # dummy argument for launching multiple runs w/ same hparams
+aligned_sampling: false  # if true, each batch contains every random init version of the same image. extra_aug must be >0.
+grad_clip: null  # gradient clipping max value (float)
+
+compile: false  # pytorch 2.0 can speed up training by compiling model, though it has an initial overhead
+debug_compile: false  # useful to debug graph breaks in pytorch 2.0 compilation
+debug: false  # useful to debug training, no wandb
+
+lr: 0.0001
+weight_decay: 0.01
+extra_aug: 10  # number of augmented datasets (SIRENs trained on same images from random inits) to use
+loss_type: l2  # l2 or l1
+
+group: ${hydra:runtime.dset}  # wandb group runs in a sweep
+output_dir: ${hydra:runtime.output_dir}
+# don't change directory
+hydra:
+  job:
+    chdir: False
