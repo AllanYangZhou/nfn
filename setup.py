@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='nfn',
-    version='0.1.1',
+    version='0.1.2',
     description='Neural Functional Network (NFN) layers',
     url='https://github.com/AllanYangZhou/nfn',
     author='Allan Zhou',

@@ -1,5 +1,5 @@
 # Neural Functional Networks (NFNs)
-### [[Paper (arXiv)](https://arxiv.org/abs/2302.14040)]
+### Papers: [Permutation Equivariant Neural Functionals](https://arxiv.org/abs/2302.14040) and [Neural Functional Transformers](https://arxiv.org/abs/2305.13546)
 
 ![Diagram of NFN](/imgs/diagram.png)
 
