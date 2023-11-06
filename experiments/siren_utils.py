@@ -201,6 +201,22 @@ def hyper_bias_init(m):
             m.bias.uniform_(-1/fan_in, 1/fan_in)
 
 
+class SimpleHyperNetwork(nn.Module):
+    def __init__(self, network_spec: NetworkSpec, in_size, hidden_size=256, hidden_layers=1):
+        super().__init__()
+        self.network_spec = network_spec
+        layers = [nn.Linear(in_size, hidden_size), nn.ReLU()]
+        for _ in range(hidden_layers - 1):
+            layers.append(nn.Linear(hidden_size, hidden_size))
+            layers.append(nn.ReLU())
+        num_params = network_spec.get_num_params()
+        layers.append(nn.Linear(hidden_size, num_params))
+        self.hnet = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.hnet(x)
+
+
 class HyperNetwork(nn.Module):
     def __init__(self, network_spec: NetworkSpec, in_size, hidden_size=256, hidden_layers=1):
         super().__init__()

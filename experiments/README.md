@@ -57,3 +57,14 @@ python -m experiments.launch_stylize_siren +setup=mnist nfnet=equiv
 ## Classifying SIRENs
 These experiments use the same MNIST, FashionMNIST, and CIFAR-10 INR datasets as in the previous section.
 ### With INR2Array (NFT)
+This produces low-dimensional embeddings of the SIRENs using Neural Functional Transformers (NFTs). Some reasonable hyperparam configs:
+```bash
+# MNIST
+python -m experiments.launch_inr2array dset=mnist model=nft compile=true
+# FashionMNIST
+python -m experiments.launch_inr2array dset=fashion model=nft compile=true
+# CIFAR
+python -m experiments.launch_inr2array dset=cifar model=nft_additive compile=true
+```
+
+You may also add `model/pool_cls=crossattn_2x2` or `cross_attn_8x8` to vary the size of the spatial latent. `compile` uses Pytorch 2.0's new compile feature which can improve computational performance.

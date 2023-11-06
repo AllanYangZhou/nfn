@@ -8,7 +8,6 @@ bs: 64
 total_steps: 200_000
 warmup_steps: 10_000
 decay_start: null  # when to start decaying learning rate. if none, start at warmup_steps
-beta: 0  # VAE beta. If 0, then VAE is not used
 true_target: false  # if true, then the autoencoding target is the true image, not the siren reconstruction
 amp_enabled: false  # train using mixed precision (faster, less precise)
 amp_dtype: float16  # only used if amp_enabled is true. other options: bfloat16

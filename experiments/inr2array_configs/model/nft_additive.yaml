@@ -1,0 +1,7 @@
+defaults:
+  - nft
+
+dec_type: simple
+additive: true
+dec_hidden_layers: 2
+dec_hidden_size: 256

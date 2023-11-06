@@ -8,6 +8,7 @@ spatial: true
 compile: false
 enc_scale: 3
 enc_map_size: 128
+dec_type: sitzmann
 additive: false
 
 dec_hidden_size: 256

@@ -18,7 +18,7 @@ from experiments.data_utils import cycle, SirenAndOriginalDataset, AlignedSample
 from experiments.train_utils import get_linear_warmup_with_cos_decay
 from experiments.models import Block
 from experiments.siren_utils import get_batch_siren, get_spatial_batch_siren, unprocess_img_arr
-from experiments.siren_utils import HyperNetwork
+from experiments.siren_utils import HyperNetwork, SimpleHyperNetwork
 from perceiver_pytorch import Perceiver
 
 
@@ -108,13 +108,15 @@ BLOCK_TYPES = {
     "hnp_residual": hnp_resblock,
     "nft": Block,
 }
+DEC_TYPES = {"sitzmann": HyperNetwork, "simple": SimpleHyperNetwork}
 class AutoEncoder(nn.Module):
     def __init__(
         self, network_spec: NetworkSpec, dset_data_type,
         block_type="nft", pool_cls=PerceiverPooling,
-        num_blocks=3, spatial=False, vae=False,
+        num_blocks=3, spatial=False,
         compile=False,
         enc_scale=3, enc_map_size=128,  # scalen and dimension of gaussian fourier features
+        dec_type="sitzmann",  # sitzmann: one MLP to per each SIREN weight/bias. simple: one MLP total.
         dec_hidden_size=256, dec_hidden_layers=1,
         additive=False,  # if true, the decoder output is a delta, added to a learned set of SIREN parameters
         debug_compile=False,  # if true, explains compilation process on first forward
@@ -123,7 +125,6 @@ class AutoEncoder(nn.Module):
         super().__init__()
         self.network_spec = network_spec
         self.spatial = spatial
-        self.vae = vae
         self.compile, self.debug_compile = compile, debug_compile
         n_chan = 2 * enc_map_size
         self.encoder = nn.Sequential(
@@ -132,18 +133,14 @@ class AutoEncoder(nn.Module):
             *[BLOCK_TYPES[block_type](network_spec, n_chan, **block_kwargs) for _ in range(num_blocks)],
             pool_cls(network_spec, n_chan, reduce=not spatial),
         )
-        assert self.encoder[-1].get_feature_shape()[-1] % 2 == 0
-        latent_shape = self.encoder[-1].get_feature_shape()
-        # last latent dim is split into mean and logvar for vae
-        self.latent_shape = (*latent_shape[:-1], latent_shape[-1] // 2 if vae else latent_shape[-1])
+        self.latent_shape = self.encoder[-1].get_feature_shape()
         self.decoder = nn.Sequential(
-            HyperNetwork(network_spec, self.latent_shape[-1], dec_hidden_size, dec_hidden_layers),
+            DEC_TYPES[dec_type](network_spec, self.latent_shape[-1], dec_hidden_size, dec_hidden_layers),
             Rearrange("b l -> b l ()"),
             UnflattenWeights(network_spec),
         )
         if spatial:
             assert len(self.latent_shape) == 2
-            n_patch_per_dim = int(math.sqrt(self.latent_shape[0]))
             self.batch_siren, init_params = get_spatial_batch_siren(dset_data_type)
         else:
             self.batch_siren, init_params = get_batch_siren(dset_data_type)
@@ -160,21 +157,11 @@ class AutoEncoder(nn.Module):
         if self.compile: self._fast_forward = torch.compile(self._forward_helper)
 
     def encode(self, x):
-        out = self.encoder(x)
-        if self.vae:
-            mean, logvar = out.chunk(2, dim=-1)
-            std = torch.exp(0.5 * logvar)
-            out = mean + std * torch.randn_like(std)
-        return out
+        return self.encoder(x)
 
     def _forward_helper(self, x):
         """Functorch prevents compiling the entire forward method, but this helper can be compiled."""
-        mean, logvar = None, None
         z = self.encoder(x)
-        if self.vae:
-            mean, logvar = z.chunk(2, dim=-1)
-            std = torch.exp(0.5 * logvar)
-            z = mean + std * torch.randn_like(std)
         if self.spatial:
             bs, num_latents = z.shape[:2]
             z = torch.flatten(z, end_dim=1)
@@ -184,19 +171,19 @@ class AutoEncoder(nn.Module):
                 # remove singleton channel dim
                 return arr.reshape(bs, num_latents, *arr.shape[1:]).squeeze(2)
             out = out.map(unflatten)
-        return out, mean, logvar
+        return out
 
     def forward(self, x):
         if self.debug_compile:
             _, _, _, _, _, explanation_verbose = dynamo.explain(self._forward_helper, x)
             print(explanation_verbose)
             self.debug_compile = False
-        out, mean, logvar = self._fast_forward(x) if self.compile else self._forward_helper(x)
+        out = self._fast_forward(x) if self.compile else self._forward_helper(x)
         out = params_to_func_params(out)
         if self.init_params is not None:
             out = [p * scale + init_p[None, None] for p, init_p, scale in zip(out, self.init_params, self.additive_scales)]
         out = self.batch_siren(out)
-        return out, mean, logvar
+        return out
 
     def sample(self, num_samples):
         device = next(self.parameters()).device
@@ -218,7 +205,7 @@ class AutoEncoder(nn.Module):
 
 
 @torch.no_grad()
-def evaluate(nfnet, loader, beta, orig_batch_siren, true_target, loss_type='l2'):
+def evaluate(nfnet, loader, orig_batch_siren, true_target, loss_type='l2'):
     orig_state = nfnet.training
     nfnet.eval()
     loss = 0
@@ -226,9 +213,9 @@ def evaluate(nfnet, loader, beta, orig_batch_siren, true_target, loss_type='l2')
         params = WeightSpaceFeatures(*wts_and_bs).to("cuda")
         if not true_target:
             img = orig_batch_siren(params_to_func_params(params))
-        pred_img, mean, logvar = nfnet(params)
-        _, _, tot_loss = compute_vae_losses(img.cuda(), pred_img, mean, logvar, beta, loss_type)
-        loss += tot_loss
+        pred_img = nfnet(params)
+        batch_loss = compute_losses(img.cuda(), pred_img, loss_type)
+        loss += batch_loss
     nfnet.train(orig_state)
     return loss / len(loader)
 
@@ -251,21 +238,17 @@ def sample_recon(nfnet, loader, orig_batch_siren):
     params, true_img = params.map(lambda x: x[:32]), true_img[:32]
     orig_outs = orig_batch_siren(params_to_func_params(params))
     orig_outs = unprocess_img_arr(orig_outs.cpu().numpy())
-    new_outs, _, _ = nfnet(params)
+    new_outs = nfnet(params)
     new_outs = unprocess_img_arr(new_outs.cpu().numpy())
     nfnet.train(orig_state)
     return orig_outs, new_outs, unprocess_img_arr(true_img.cpu().numpy())
 
 
-def compute_vae_losses(x, x_recon, mean, logvar, beta, loss_type='l2'):
+def compute_losses(x, x_recon, loss_type='l2'):
     if loss_type == 'l2':
-        recon_loss = F.mse_loss(x_recon, x)
+        return F.mse_loss(x_recon, x)
     else:
-        recon_loss = F.l1_loss(x_recon, x)
-    kl_loss = torch.tensor(0., device=x.device)
-    if beta > 0:
-        kl_loss = 0.5 * (mean**2 + torch.exp(logvar) - logvar - 1).mean()
-    return recon_loss, kl_loss, recon_loss + beta * kl_loss
+        return F.l1_loss(x_recon, x)
 
 
 def train_and_eval(cfg):
@@ -277,8 +260,7 @@ def train_and_eval(cfg):
         wandb_id = prev_ckpt["wandb_run_id"]
     if not cfg.debug:
         wandb.init(
-            project=f"embed_siren",
-            entity="iris-ayz",
+            project="inr2array",
             reinit=True,
             resume="must" if wandb_id is not None else False,
             id=wandb_id,
@@ -302,7 +284,7 @@ def train_and_eval(cfg):
     valloader = DataLoader(valset, batch_size=cfg.bs, shuffle=False, num_workers=8, drop_last=True)
 
     spec = network_spec_from_wsfeat(WeightSpaceFeatures(*next(iter(trainloader))[0]).to("cpu"), set_all_dims=True)
-    nfnet: AutoEncoder = hydra.utils.instantiate(cfg.model, spec, valset.data_type, vae=cfg.beta > 0).to("cuda")
+    nfnet: AutoEncoder = hydra.utils.instantiate(cfg.model, spec, valset.data_type).to("cuda")
     nfnet_fast = torch.compile(nfnet) if cfg.compile else nfnet
     if not cfg.debug and cfg.watch_grads: wandb.watch(nfnet_fast, log="gradients", log_freq=1000)
     orig_batch_siren = get_batch_siren(valset.data_type)[0]
@@ -335,11 +317,9 @@ def train_and_eval(cfg):
         opt.zero_grad()
         amp_dtype = {"float16": torch.float16, "bfloat16": torch.bfloat16}[cfg.amp_dtype]
         with torch.amp.autocast("cuda", enabled=cfg.amp_enabled, dtype=amp_dtype):
-            pred_img, mean, logvar = nfnet_fast(params)
-            recon_loss, kl_loss, tot_loss = compute_vae_losses(
-                img.cuda(), pred_img, mean, logvar, cfg.beta, cfg.loss_type
-            )
-        scaler.scale(tot_loss).backward()
+            pred_img = nfnet_fast(params)
+            train_loss = compute_losses(img.cuda(), pred_img)
+        scaler.scale(train_loss).backward()
         scaler.unscale_(opt)
         if cfg.grad_clip is not None:
             tot_norm = nn.utils.clip_grad_norm_(nfnet.parameters(), cfg.grad_clip)
@@ -349,14 +329,12 @@ def train_and_eval(cfg):
         if step % 10 == 0:
             if not cfg.debug:
                 wandb.log({
-                    "train/recon_loss": recon_loss.item(),
-                    "train/kl_loss": kl_loss.item(),
-                    "train/loss": tot_loss.item(),
+                    "train/loss": train_loss.item(),
                     "lr": scheduler.get_last_lr()[0],
                     "tot_norm": tot_norm.item() if cfg.grad_clip is not None else 0,
                 }, step=step)
         if step % 1000 == 0:
-            val_loss = evaluate(nfnet, valloader, cfg.beta, orig_batch_siren, cfg.true_target, cfg.loss_type)
+            val_loss = evaluate(nfnet, valloader, orig_batch_siren, cfg.true_target, cfg.loss_type)
             orig_siren, new_siren, true_img = sample_recon(nfnet, valloader, orig_batch_siren)
             metrics = {
                 "val/loss": val_loss.item(),
@@ -364,9 +342,6 @@ def train_and_eval(cfg):
                 "val/recon_siren": [wandb.Image(Image.fromarray(x)) for x in new_siren],
                 "val/true_img": [wandb.Image(Image.fromarray(x)) for x in true_img],
             }
-            if cfg.beta > 0:
-                samples = sample(nfnet)
-                metrics["rand_samples"] = [wandb.Image(Image.fromarray(x)) for x in samples]
             if not cfg.debug: wandb.log(metrics, step=step)
             if val_loss < best_val_loss:
                 torch.save(nfnet.state_dict(), os.path.join(cfg.output_dir, "best_nfnet.pt"))
@@ -380,15 +355,15 @@ def train_and_eval(cfg):
                 "best_val_loss": best_val_loss,
                 "wandb_run_id": wandb.run.id if not cfg.debug else None,
             }, ckpt_path)
-        outer_pbar.set_description(f"recon_loss: {recon_loss.item():.3f}, val_loss: {val_loss.item():.3f}")
+        outer_pbar.set_description(f"train_loss: {train_loss.item():.3f}, val_loss: {val_loss.item():.3f}")
         if cfg.debug: break
     print("Testing")
     nfnet.load_state_dict(torch.load(os.path.join(cfg.output_dir, "best_nfnet.pt")))
     testset: SirenAndOriginalDataset = hydra.utils.instantiate(cfg.dset, split="test")
     testloader = DataLoader(testset, batch_size=cfg.bs, shuffle=False, num_workers=8, drop_last=True)
-    test_loss = evaluate(nfnet, testloader, cfg.beta, orig_batch_siren, cfg.true_target, cfg.loss_type)
+    test_loss = evaluate(nfnet, testloader, orig_batch_siren, cfg.true_target, cfg.loss_type)
     trainset: SirenAndOriginalDataset = hydra.utils.instantiate(cfg.dset, split="train")
     trainloader = DataLoader(trainset, batch_size=cfg.bs, shuffle=False, num_workers=8, drop_last=True)
-    train_loss = evaluate(nfnet, trainloader, cfg.beta, orig_batch_siren, cfg.true_target, cfg.loss_type)
+    train_loss = evaluate(nfnet, trainloader, orig_batch_siren, cfg.true_target, cfg.loss_type)
     print(f"Test loss: {test_loss.item():.3f}")
     if not cfg.debug: wandb.log({"test/loss": test_loss.item(), "train/final_loss": train_loss.item()}, step=cfg.total_steps)
