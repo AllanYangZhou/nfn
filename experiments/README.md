@@ -69,7 +69,7 @@ python -m experiments.launch_inr2array dset=cifar model=nft_additive compile=tru
 ```
 You may also add `model/pool_cls=crossattn_2x2` or `cross_attn_8x8` to vary the size of the spatial latent. `compile` uses Pytorch 2.0's new compile feature which can improve computational performance.
 
-Once the INR2Array model is trained, you want to produce a dataset of embeddings from the SIREN dataset. In this example, `rundir` should be the hydra rundir for the INR2Array model you just trained.
+Once the INR2Array model is trained, you want to produce a dataset of embeddings from the SIREN dataset. In this example, `rundir` should be the hydra rundir for the INR2Array model you just trained, which could be something like `./outputs/2023-11-05/23-51-53`.
 
 ```bash
 python -m experiments.make_latent_dset --rundir [...] --output_path experiments/data/mnist-embeddings.pt
