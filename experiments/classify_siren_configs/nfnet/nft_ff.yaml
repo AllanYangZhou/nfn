@@ -1,0 +1,11 @@
+defaults:
+  - inp_enc_cls: gaussian
+  - head_cls: perceiver
+_target_: experiments.models.NPTransformer
+num_blocks: 4
+normalize: false
+dropout: 0.1
+ff_factor: 2
+
+inp_enc_cls:
+  scale: 3

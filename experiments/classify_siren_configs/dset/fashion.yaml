@@ -1,0 +1,4 @@
+_target_: experiments.data_utils.SirenDataset
+data_path: ${data_root_dir}/siren_fashion_wts
+prefix: randinit_smaller
+split_points: [45000, 50000]

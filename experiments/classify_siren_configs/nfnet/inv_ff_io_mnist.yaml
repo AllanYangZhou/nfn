@@ -1,0 +1,16 @@
+defaults:
+  - inv_ff
+  - pos_enc_cls: sin
+
+mode: NP
+
+pos_enc_cls:
+  max_freq: 3
+  num_bands: 3
+
+inp_enc_cls:
+  scale: 3
+
+head_cls:
+  dropout: 0.1
+feature_dropout: 0.1

@@ -1,0 +1,5 @@
+_target_: experiments.models.MlpNFN
+h_size: 1000
+dropout: 0.0
+sigmoid: true
+normalize: false

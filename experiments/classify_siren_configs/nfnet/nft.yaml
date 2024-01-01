@@ -1,0 +1,6 @@
+defaults:
+  - inp_enc_cls: pointwise
+_target_: experiments.models.NPTransformer
+num_blocks: 4
+normalize: true
+dropout: 0.1

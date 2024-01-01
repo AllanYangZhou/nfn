@@ -1,0 +1,4 @@
+_target_: nfn.layers.GaussianFourierFeatureTransform
+_partial_: true
+mapping_size: 128
+scale: 10

@@ -1,0 +1,6 @@
+_target_: experiments.models.MlpHead
+_partial_: true
+sigmoid: false
+num_out: 10
+lnorm: false
+dropout: 0.0

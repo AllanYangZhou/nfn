@@ -1,0 +1,6 @@
+# @package _global_
+
+defaults:
+  - override /dset: cifar
+
+extra_aug: 20

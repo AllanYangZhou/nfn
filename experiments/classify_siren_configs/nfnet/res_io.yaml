@@ -1,0 +1,12 @@
+defaults:
+  - head_cls: mlp
+  - inp_enc_cls: gaussian
+  - pos_enc_cls: sin
+
+_target_: experiments.models.InvariantResNFN
+hchannels: [512, 512, 512, 512]
+mode: NP
+feature_dropout: 0.0
+
+head_cls:
+  lnorm: simple

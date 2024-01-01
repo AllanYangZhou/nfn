@@ -1,0 +1,8 @@
+defaults:
+  - inv_ff
+  - pos_enc_cls: sin
+
+mode: NP
+
+head_cls:
+  dropout: 0.5

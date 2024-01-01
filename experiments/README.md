@@ -57,6 +57,15 @@ python -m experiments.launch_stylize_siren +setup=mnist nfnet=equiv
 ## Classifying SIRENs
 These experiments use the same MNIST, FashionMNIST, and CIFAR-10 INR datasets as in the previous section.
 
+### With NFNs
+This follows the SIREN classification experiments in *Permutation Equivariant Neural Functionals*, for the MNIST, FashionMNIST, and CIFAR-10 datasets.
+
+```bash
+python -m experiments.launch_classify_siren +setup=mnist
+python -m experiments.launch_classify_siren +setup=fashion
+python -m experiments.launch_classify_siren +setup=cifar
+```
+
 ### With INR2Array (NFT)
 This produces low-dimensional embeddings of the SIRENs using Neural Functional Transformers (NFTs). Some reasonable hyperparam configs:
 ```bash

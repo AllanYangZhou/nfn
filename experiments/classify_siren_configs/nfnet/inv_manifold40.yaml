@@ -1,0 +1,17 @@
+defaults:
+  - head_cls: mlp
+  - inp_enc_cls: pointwise
+  - pos_enc_cls: sin
+
+_target_: experiments.models.InvariantNFN
+hchannels: [16, 16]
+mode: NP
+feature_dropout: 0.0
+normalize: false
+lnorm: null
+append_stats: false
+
+head_cls:
+  num_out: 40
+inp_enc_cls:
+  out_channels: 8

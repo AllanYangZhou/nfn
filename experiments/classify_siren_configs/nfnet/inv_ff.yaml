@@ -1,0 +1,15 @@
+defaults:
+  - head_cls: mlp
+  - inp_enc_cls: gaussian
+
+_target_: experiments.models.InvariantNFN
+hchannels: [512, 512, 512]
+mode: HNP
+feature_dropout: 0.0
+normalize: false
+lnorm: null
+append_stats: false
+pos_enc_cls: null
+
+head_cls:
+  dropout: 0.5

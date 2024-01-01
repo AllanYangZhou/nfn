@@ -1,0 +1,11 @@
+defaults:
+  - inv_ff
+
+mode: HNP
+
+inp_enc_cls:
+  scale: 3
+
+head_cls:
+  dropout: 0.1
+feature_dropout: 0.1

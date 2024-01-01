@@ -1,0 +1,11 @@
+_target_: experiments.models.PerceiverNet
+_partial_: true
+num_classes: 10
+depth: 1
+self_per_cross_attn: 0
+num_latents: 16
+latent_dim: 256
+latent_heads: 4
+cross_dim_head: 256
+dropout: 0
+pool_latents: false

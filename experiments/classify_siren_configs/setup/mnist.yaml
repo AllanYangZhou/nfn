@@ -1,0 +1,6 @@
+# @package _global_
+
+defaults:
+  - override /dset: mnist
+
+extra_aug: 10

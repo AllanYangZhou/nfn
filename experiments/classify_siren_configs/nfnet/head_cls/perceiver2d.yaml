@@ -1,0 +1,10 @@
+_target_: experiments.models.Perceiver2d
+_partial_: true
+num_classes: 10
+depth: 1
+self_per_cross_attn: 2
+num_latents: 64
+latent_dim: 128
+latent_heads: 4
+dropout: 0.1
+pool_latents: false
